@@ -1,0 +1,1218 @@
+@import "tailwindcss";
+
+/* Tailwind v4 only generates a color utility (bg-accent, text-accent,
+   outline-accent, …) from a variable named --color-<name> inside @theme —
+   a plain :root custom property (see --accent below) is invisible to it.
+   --accent/--accent-dim have been defined in :root, but never re-declared
+   here, since this app was set up: every `bg-accent`/`text-accent`/
+   `outline-accent`/`bg-accent-dim` class anywhere in the codebase (9 files,
+   including the office rail's own "Approve" button) has been compiling to
+   nothing — no color, no error, silently invisible. Found live 2026-09-02
+   redesigning NotificationCard's icons, when a "solid accent fill" icon
+   rendered as fully transparent. Mapped to the exact same values as :root's
+   --accent/--accent-dim below, not a new color — this fixes the utility,
+   it doesn't redefine the brand color. */
+/* Three amber shades that were each hardcoded ~5-8x across the office/agent
+   UI as both a bracket hex class AND its rgba() equivalent (e.g. `#d9ab6e`
+   next to `rgba(217,171,110,0.13)` for the same badge) — no shared token,
+   so a color tweak meant hunting every call site in both formats. Tokenized
+   verbatim (same three shades, not merged into one) so nothing renders
+   differently: --color-amber = pending/notification-count badges,
+   --color-amber-warn = enterprise-lock icon / status text / limit warnings,
+   --color-amber-light = "Upgrade" link text (with its own hover tint). */
+/* Three "accent, but on hover" greens, each hardcoded ~7x — not random
+   drift, each was already used consistently for one specific hover
+   context, just never named: --color-accent-btn-hover on solid bg-accent
+   buttons, --color-accent-link-hover on text-accent links/node borders,
+   --color-accent-badge-hover on the chat action-list number badge.
+   Tokenized as the same three verbatim values, not merged into one. */
+@theme {
+  --color-accent: #b7cba6;
+  --color-accent-dim: rgba(183, 203, 166, 0.12);
+  --color-amber: #d9ab6e;
+  --color-amber-warn: #e8b96a;
+  --color-amber-light: #e8c088;
+  --color-amber-light-hover: #f0cd9c;
+  --color-accent-btn-hover: #00d489;
+  --color-accent-link-hover: #00f5b0;
+  --color-accent-badge-hover: #2dd4a0;
+  /* LobeHub-style single tokens — one border, three surfaces, three radii.
+     Semua panel console harus pakai ini, bukan border-white/[0.045..0.12]
+     acak atau radius 8/9/10/12/14/16/20/24/28 sebar. */
+  --color-line: rgba(255, 255, 255, 0.06);
+  --color-surface-1: #353531;
+  --color-surface-2: #3a3a36;
+  --color-surface-3: #42423f;
+  --color-surface-inset: #2d2d2b;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  /* Unlike the greens above, this one WAS unintentional drift: 5 different
+     near-blacks (#1a1a18, #1a1a24, #1c2318, #1a0b2e, plain black) were each
+     used ad hoc for text/elements sitting on the accent-green fill, with no
+     shared token. Consolidated to the most-used value (#1a1a18) — the
+     other four are a deliberate visual decision, not just a rename, so
+     don't reintroduce them for this purpose. Doesn't touch unrelated
+     coincidental reuses of these same hex values for plain dark panel
+     backgrounds / print-document body text / workflow-node chrome. */
+  --color-on-accent: #1a1a18;
+}
+
+/* Real font files for literal font-family: 'Manrope'/'Doto' lookups — needed
+   both by the many hardcoded `font-family: 'Manrope'` rules below (next/font
+   only exposes a scoped class name, not the literal family) and by the PDF
+   export's canvas-rendered text (title/date/score numbers in lib/pdfExport.ts
+   use ctx.font = '... "Manrope"/"Doto" ...', which only resolves against
+   @font-face-registered families, not next/font). */
+@font-face {
+  font-family: 'Manrope';
+  src: url('/dashboard/fonts/Manrope-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/dashboard/fonts/Manrope-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Doto';
+  src: url('/dashboard/fonts/Doto-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --bg-main: #353531;
+  --bg-elevated: #3a3a36;
+  --bg-soft: #353531;
+  --bg-card: #3a3a36;
+  --border-soft: rgba(255,255,255,0.07);
+  --border-card: rgba(255,255,255,0.05);
+  --text-primary: #f7f7f7;
+  --text-secondary: #f7f7f7;
+  --text-tertiary: #a1a1aa;
+  --accent: #b7cba6;
+  --accent-dim: rgba(183, 203, 166, 0.12);
+
+  --surface-secondary: #353531;
+  --surface-tertiary: #3a3a36;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  /* Alias token tunggal — semua border hairline console mengacu ke sini.
+     Jangan perkenalkan opacity border baru (0.045/0.05/0.07/0.08/0.10/0.12)
+     di komponen console; pakai border-line (Tailwind) / var(--border-subtle). */
+
+  --card-bg: rgba(255,255,255,0.03);
+  --card-border: rgba(255,255,255,0.05);
+  --card-radius: 18px;
+  --card-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  --card-padding: 1.5rem;
+  --card-backdrop: blur(8px);
+}
+
+.font-manrope {
+  font-family: var(--font-manrope), sans-serif;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 3px;
+  height: 1.125em;
+  background-color: #b7cba6;
+  border-radius: 1px;
+  vertical-align: middle;
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-manrope), 'Manrope', Manrope, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #353531;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.console-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 120px 20px 180px 20px;
+  max-width: 820px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ── Global scrollbar ── */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.13);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+
+.chat-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-area::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+}
+
+.chat-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+.message {
+  padding: 18px 22px;
+  border-radius: 20px;
+  margin-bottom: 18px;
+  line-height: 1.6;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+  font-size: 15px;
+  color: var(--text-primary);
+  word-wrap: break-word;
+  transition: background 0.15s ease;
+}
+
+.message.user {
+  background: var(--bg-soft);
+}
+
+.message.assistant {
+  background: var(--bg-elevated);
+}
+
+.message-role {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.message-content {
+  color: var(--text-primary);
+}
+
+.input-wrapper {
+  position: sticky;
+  bottom: 0;
+  padding: 24px 20px 30px;
+  background: linear-gradient(
+    to top,
+    #353531 0%,
+    rgba(53,53,49,0.98) 50%,
+    rgba(53,53,49,0.85) 80%,
+    rgba(53,53,49,0) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 10;
+}
+
+.input-box {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  background: var(--color-surface-3);
+  border: 1px solid var(--border-soft);
+  border-radius: 28px;
+  padding: 12px 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+.input-box:focus-within {
+  border-color: rgba(255,255,255,0.12);
+}
+
+.add-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  color: var(--text-primary);
+  font-size: 20px;
+  cursor: pointer;
+  margin-right: 12px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.add-btn:hover {
+  background: #3a3833;
+  border-color: rgba(255,255,255,0.1);
+}
+
+.add-btn:active {
+  transform: scale(0.96);
+}
+
+.input-box textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  resize: none;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.6;
+  font-family: var(--font-manrope), 'Manrope', sans-serif;
+  min-height: 24px;
+  max-height: 200px;
+  padding: 6px 0;
+  width: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.input-box textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.input-box textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.send-btn {
+  margin-left: 12px;
+  padding: 10px 18px;
+  border-radius: 14px;
+  border: none;
+  background: #3b3a35;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: var(--font-manrope), 'Manrope', sans-serif;
+  white-space: nowrap;
+}
+
+.send-btn:hover {
+  background: #4a4944;
+}
+
+.send-btn:active {
+  transform: scale(0.96);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upload-menu {
+  position: absolute;
+  bottom: 70px;
+  left: 0;
+  width: 230px;
+  background: linear-gradient(145deg, #2a2926, #252420);
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.upload-menu.active {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.upload-item {
+  padding: 10px 14px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  color: var(--text-primary);
+}
+
+.upload-item:last-child {
+  border-bottom: none;
+}
+
+.upload-item:hover {
+  background: #32312d;
+}
+
+.upload-item:active {
+  background: #3a3833;
+}
+
+.upload-menu-hint {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #a1a1aa;
+  border-bottom: 1px solid #2e2e2e;
+  letter-spacing: 0.02em;
+}
+
+.upload-size-warning {
+  position: absolute;
+  bottom: 70px;
+  left: 0;
+  font-size: 12px;
+  color: #f5a623;
+  padding: 6px 10px;
+  pointer-events: none;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.empty-state-title {
+  font-size: 24px;
+  font-weight: 300;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.empty-state-text {
+  font-size: 15px;
+  color: var(--text-secondary);
+  max-width: 400px;
+}
+
+@media (max-width: 768px) {
+  .chat-area {
+    padding: 80px 16px 160px 16px;
+  }
+
+  .input-wrapper {
+    padding: 20px 16px 24px;
+  }
+
+  .message {
+    padding: 16px 18px;
+    font-size: 14px;
+  }
+
+  .upload-menu {
+    width: calc(100vw - 32px);
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+  }
+
+  .upload-menu.active {
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* ── App Layout ── */
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-main-content {
+  flex: 1;
+  margin-left: 220px;
+  min-width: 0;
+  overflow-y: auto;
+  height: 100vh;
+}
+
+@media (max-width: 768px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .app-main-content {
+    margin-left: 0;
+    height: auto;
+  }
+}
+
+/* ── Attachment chip ── */
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2f2e2a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.attachment-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip-remove {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.attachment-chip-remove:hover {
+  color: var(--text-primary);
+}
+
+/* ── Attachment toast ── */
+.attachment-toast {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #3a3833;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* ── Blueprint picker modal ── */
+.blueprint-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blueprint-modal {
+  background: #252420;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 18px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+}
+
+.blueprint-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.blueprint-modal-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.blueprint-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.blueprint-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.blueprint-modal-list {
+  padding: 8px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.blueprint-modal-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 14px 20px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.blueprint-modal-item:last-child {
+  border-bottom: none;
+}
+
+.blueprint-modal-item:hover {
+  background: #2f2e2a;
+}
+
+.bmi-version {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.bmi-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ── ReactFlow global overrides ── */
+.react-flow,
+.react-flow__renderer,
+.react-flow__pane,
+.react-flow__viewport,
+.react-flow__container {
+  background: transparent !important;
+}
+
+.react-flow__node.selected > div,
+.react-flow__node:focus > div {
+  outline: none !important;
+}
+
+.react-flow__panel.bottom.right,
+.react-flow__attribution {
+  display: none !important;
+}
+
+/* ── Nuclear override: strip ReactFlow default chrome ── */
+.react-flow__node,
+.react-flow__node-standardNode,
+.react-flow__node-appNode,
+.react-flow__node-agentNode,
+.react-flow__node-workflowStep,
+.react-flow__node-triggerNode,
+.react-flow__node-agent,
+.react-flow__node-workflowNode,
+.react-flow__node-appNodeLegacy,
+.react-flow__node-standardNodeLegacy {
+  border-radius: 0 !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ── Typing bounce animation ── */
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+/* ── Prose container for AI messages ── */
+.prose-aira {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #f7f7f7;
+  word-break: break-word;
+  text-align: left;
+}
+
+.prose-aira p,
+.prose-aira li,
+.prose-aira h1,
+.prose-aira h2,
+.prose-aira h3,
+.prose-aira h4,
+.prose-aira blockquote,
+.prose-aira table {
+  animation: proseTokenFadeIn 0.2s ease-out;
+}
+
+/* Saat streaming, matikan animasi per-token — tiap token baru me-remount
+   dan me-retrigger fade, terlihat kedip + boros compositor. LobeHub hanya
+   menganimasikan mount awal, bukan tiap delta stream. */
+.prose-aira.is-streaming p,
+.prose-aira.is-streaming li,
+.prose-aira.is-streaming h1,
+.prose-aira.is-streaming h2,
+.prose-aira.is-streaming h3,
+.prose-aira.is-streaming h4,
+.prose-aira.is-streaming blockquote,
+.prose-aira.is-streaming table,
+.prose-aivory.is-streaming p,
+.prose-aivory.is-streaming li,
+.prose-aivory.is-streaming blockquote,
+.prose-aivory.is-streaming table {
+  animation: none;
+}
+
+@keyframes proseTokenFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.prose-aira ul ul,
+.prose-aira ol ol,
+.prose-aira ul ol,
+.prose-aira ol ul {
+  margin-left: 1.5rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* ── Global headline typography ── */
+.app-main-content h1,
+.app-main-content h2,
+.app-main-content h3 {
+  font-family: var(--font-manrope), 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+/* ── Manus Design System Typography ──
+   Scoped to `.prose-aivory` (the AI-message markdown wrapper in
+   ChatMessage.tsx), NOT the `<main>` landmark — the whole routed app is
+   rendered inside `<main>` (see app/layout.tsx), so a `main h1 {...}` /
+   `main p {...}` selector here silently overrode Tailwind classes on
+   every heading and paragraph in the dashboard, not just chat messages. */
+.prose-aivory {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.prose-aivory h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin-top: 2.5rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+}
+
+.prose-aivory h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  line-height: 1.25;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+}
+
+.prose-aivory h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.3;
+  color: #f7f7f7;
+}
+
+.prose-aivory h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+  color: #f7f7f7;
+}
+
+.prose-aivory p:not([class*="restTitle"]):not([class*="descriptionText"]) {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #f7f7f7;
+  margin-bottom: 1.25rem;
+}
+
+.prose-aivory p:last-child {
+  margin-bottom: 0;
+}
+
+.prose-aivory small,
+.prose-aivory .caption {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.prose-aivory ul,
+.prose-aivory ol {
+  margin: 1rem 0;
+  padding-left: 1.5rem;
+  color: #f7f7f7;
+}
+
+.prose-aivory li {
+  font-size: 1rem;
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+
+.prose-aivory blockquote {
+  margin: 1.25rem 0;
+  padding-left: 1rem;
+  border-left: 2px solid rgba(183, 203, 166, 0.4);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.prose-aivory table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin: 1.25rem 0;
+}
+
+.prose-aivory th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.prose-aivory td {
+  padding: 0.75rem 1rem;
+  color: #f7f7f7;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ── Global heading typography default — Manrope weight 200 ──
+   Lives in Tailwind's own `@layer base` (not a plain unlayered rule) so
+   the normal Tailwind cascade applies: any utility class on the element
+   (`font-semibold`, `text-xl`, …) is in `@layer utilities`, which always
+   outranks `@layer base` regardless of specificity, so it wins as
+   expected. Also wrapped in :where() so a component's own unlayered CSS
+   (a `.module.css` rule like `.pageTitle { font-weight: 600 }`) wins too.
+   This used to be an unlayered, `!important` rule that silently beat both
+   of those — dozens of CSS modules declare 500/600/700 on classes like
+   `.pageTitle`/`.modalTitle`/`.sectionTitle` and were losing to it. */
+@layer base {
+  :where(
+    h1, h2, h3, h4, h5, h6,
+    [class*="title"]:not([class*="node"]):not([class*="workflow"]):not([class*="label"]):not([class*="Node"]):not([class*="Workflow"]),
+    [class*="Title"]:not([class*="node"]):not([class*="workflow"]):not([class*="label"]):not([class*="Node"]):not([class*="Workflow"]),
+    [class*="heading"]:not([class*="node"]):not([class*="workflow"]):not([class*="Node"]):not([class*="Workflow"]),
+    [class*="Heading"]:not([class*="node"]):not([class*="workflow"]):not([class*="Node"]):not([class*="Workflow"])
+  ) {
+    font-family: var(--font-manrope), 'Manrope', sans-serif;
+    font-weight: 200;
+  }
+}
+
+/* ── Console Hero UI Components ── */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dropIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.console-pill,
+.console-chip {
+  padding: 8px 16px;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.console-pill:hover,
+.console-chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.console-input-card {
+  background: var(--color-surface-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  transition: border-color 0.2s ease;
+}
+
+.console-input-card:focus-within {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.console-textarea {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.92);
+  resize: none;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.6;
+  font-family: var(--font-manrope), 'Manrope', sans-serif;
+  min-height: 48px;
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  text-align: left;
+}
+
+.console-textarea::-webkit-scrollbar {
+  display: none;
+}
+
+/* Invisible scrollbar utility */
+.scrollbar-invisible::-webkit-scrollbar {
+  display: none;
+}
+
+.console-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.console-icon-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.console-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.console-icon-btn:active {
+  transform: scale(0.94);
+}
+
+.console-send-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.console-send-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: scale(1.05);
+}
+
+.console-send-btn:active {
+  transform: scale(0.96);
+}
+
+.console-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.console-connect-banner {
+  background: var(--color-surface-inset);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.console-overflow-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* .console-chip adalah alias dari .console-pill — satu komponen Pill.
+   Definisi dasar ada di atas (lihat .console-pill,.console-chip); di sini
+   hanya state aktif. Jangan divergenkan padding/radius lagi. */
+
+.console-chip--active {
+  background: rgba(178, 204, 162, 0.12);
+  border-color: rgba(178, 204, 162, 0.3);
+  color: rgba(178, 204, 162, 0.95);
+}
+
+.console-dropdown {
+  position: absolute;
+  width: 320px;
+  background: #2a2926;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.console-dropdown-item {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 16px 20px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.console-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.console-dropdown-item:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Global Button Styles ── */
+.btn-style-a {
+  background: var(--color-surface-3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  font-family: var(--font-manrope), 'Manrope', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-style-a:hover:not(:disabled) {
+  background: #4e4e4b;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.btn-style-a:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-style-b {
+  background: #666864;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  font-family: var(--font-manrope), 'Manrope', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-style-b:hover:not(:disabled) {
+  background: #757875;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.btn-style-b:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── FadeSlideUp animation for Suggestion Chips / Action List ── */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeSlideUp {
+  animation: fadeSlideUp 280ms ease-out;
+}
+
+/* ── Workflow node bottom panel — force black text ── */
+/* Must be at bottom of file to win specificity over all global rules */
+[class*="restTitle"],
+[class*="descriptionText"],
+[class*="bottomSection"] p {
+  color: #1a1a18 !important;
+}
+
+/* ─── Spotlight Card (cursor-follow radial gradient) ─── */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: radial-gradient(300px circle at var(--mouse-x, 0px) var(--mouse-y, 0px),
+      rgba(111, 142, 91, 0.15),
+      transparent 40%);
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  transition: opacity 0.5s ease;
+  opacity: 0;
+}
+
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+/* ── Thinking dots — shared AI-loading indicator ──────────────
+   Same 7-dot circular pulse as the landing page's loader-wave demo
+   (frontend-nextjs), recolored from olive/sage to near-white for the
+   dashboard's dark chat surfaces. See components/ui/ThinkingDots.tsx. */
+.thinking-dots {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.thinking-dots__dot {
+  position: absolute;
+  border-radius: 9999px;
+  animation: thinkingDotsWave 1.2s infinite ease-in-out;
+}
+@keyframes thinkingDotsWave {
+  0%   { transform: scale(0.5); opacity: 0.3;  background-color: rgba(247, 247, 247, 0.55); }
+  50%  { transform: scale(1.2); opacity: 1;    background-color: #f7f7f7; }
+  100% { transform: scale(0.5); opacity: 0.3;  background-color: rgba(247, 247, 247, 0.55); }
+}
+
+/* A new pending-approval badge asks for attention — it never grabs it.
+   Two soft pulses, then it just sits there like any other count. */
+@keyframes pendingBadgeArrived {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 171, 110, 0); }
+  30%      { box-shadow: 0 0 0 5px rgba(217, 171, 110, 0.22); }
+  60%      { box-shadow: 0 0 0 0 rgba(217, 171, 110, 0); }
+}
+.pending-badge-arrived {
+  animation: pendingBadgeArrived 1.4s ease-in-out 2;
+}
+
+/* A notification card mounting into the rail — a quiet fade + rise, never
+   a restart-from-zero pop. One-shot on mount only, not retriggered while
+   the card is on screen. */
+@keyframes notificationCardIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.notification-card-in {
+  animation: notificationCardIn 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}

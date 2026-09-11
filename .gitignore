@@ -30,3 +30,9 @@ Thumbs.db
 # Local tooling
 *.log
 tmp/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Next.js build output
+.next/

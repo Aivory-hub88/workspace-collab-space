@@ -41,4 +41,4 @@ a private security advisory on GitHub.
 ## Roadmap
 
 - [x] `collab/`: sync engine + agent-scoped RBAC + schema + CI
-- [ ] `workspace/`: boards, task databases, custom fields, agent-invite UI
+- [x] `workspace/`: boards, task databases, custom fields, agent-invite UI
