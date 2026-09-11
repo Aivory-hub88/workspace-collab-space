@@ -192,7 +192,11 @@ fn room_doc_ids(room: &str) -> (String, String) {
 fn is_known_agent(s: &str) -> bool {
     matches!(
         s,
-        "autonomous" | "customer_service" | "leads_qualifier" | "finance_invoice_ops" | "office_assistant"
+        "autonomous"
+            | "customer_service"
+            | "leads_qualifier"
+            | "finance_invoice_ops"
+            | "office_assistant"
     )
 }
 
@@ -204,7 +208,10 @@ async fn agent_access(state: &AppState, doc_id: &str, agent: &str) -> Access {
     let user_id = format!("agent:{agent}");
     let Some(pg) = &state.pg else {
         warn!("authz degraded: no pg store, invited agent denied (in-memory mode)");
-        return Access { role: Role::Deny, user_id };
+        return Access {
+            role: Role::Deny,
+            user_id,
+        };
     };
     match sqlx::query_scalar::<_, String>(
         "SELECT role FROM dashboard.workspace_agent_acl WHERE doc_id = $1 AND agent_type = $2",
@@ -214,8 +221,14 @@ async fn agent_access(state: &AppState, doc_id: &str, agent: &str) -> Access {
     .fetch_optional(pg)
     .await
     {
-        Ok(Some(role)) => Access { role: parse_role(&role), user_id },
-        _ => Access { role: Role::Deny, user_id },
+        Ok(Some(role)) => Access {
+            role: parse_role(&role),
+            user_id,
+        },
+        _ => Access {
+            role: Role::Deny,
+            user_id,
+        },
     }
 }
 
@@ -235,19 +248,33 @@ async fn resolve_access(
 ) -> Access {
     let user_id = match id {
         Identity::Service => {
-            if let Some(a) = agent.map(str::trim).filter(|s| !s.is_empty() && *s != "user") {
+            if let Some(a) = agent
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "user")
+            {
                 if is_known_agent(a) {
                     return agent_access(state, doc_id, a).await;
                 }
             }
-            return Access { role: Role::Owner, user_id: "service".into() };
+            return Access {
+                role: Role::Owner,
+                user_id: "service".into(),
+            };
         }
-        Identity::Admin { user_id } => return Access { role: Role::Owner, user_id: user_id.clone() },
+        Identity::Admin { user_id } => {
+            return Access {
+                role: Role::Owner,
+                user_id: user_id.clone(),
+            }
+        }
         Identity::User { user_id } => user_id.clone(),
     };
     let Some(pg) = &state.pg else {
         warn!("authz degraded: no pg store, authenticated user gets write (in-memory mode)");
-        return Access { role: Role::Editor, user_id };
+        return Access {
+            role: Role::Editor,
+            user_id,
+        };
     };
     // doc row: prefer the room-keyed (OctoBase) row, fall back to legacy bare-id row
     let rows = sqlx::query(
@@ -258,18 +285,30 @@ async fn resolve_access(
     .fetch_all(pg)
     .await
     .unwrap_or_default();
-    let row = rows.iter().find(|r| r.get::<String, _>("id") == room_key).or_else(|| rows.first());
+    let row = rows
+        .iter()
+        .find(|r| r.get::<String, _>("id") == room_key)
+        .or_else(|| rows.first());
     let Some(row) = row else {
         // new doc — any authenticated user may create it (first writer claims owner)
-        return Access { role: Role::Editor, user_id };
+        return Access {
+            role: Role::Editor,
+            user_id,
+        };
     };
     let owner: Option<String> = row.try_get("owner").ok().flatten();
     if owner.as_deref() == Some(user_id.as_str()) {
-        return Access { role: Role::Owner, user_id };
+        return Access {
+            role: Role::Owner,
+            user_id,
+        };
     }
     if owner.is_none() {
         // ownerless doc (new or backfill miss) — first writer claims ownership
-        return Access { role: Role::Editor, user_id };
+        return Access {
+            role: Role::Editor,
+            user_id,
+        };
     }
     let workspace_id: String = row
         .try_get("workspace_id")
@@ -285,7 +324,10 @@ async fn resolve_access(
     .fetch_optional(pg)
     .await
     {
-        return Access { role: parse_role(&role), user_id };
+        return Access {
+            role: parse_role(&role),
+            user_id,
+        };
     }
     if let Ok(Some(role)) = sqlx::query_scalar::<_, String>(
         "SELECT role FROM dashboard.workspace_members WHERE workspace_id = $1 AND user_id = $2",
@@ -295,9 +337,15 @@ async fn resolve_access(
     .fetch_optional(pg)
     .await
     {
-        return Access { role: parse_role(&role), user_id };
+        return Access {
+            role: parse_role(&role),
+            user_id,
+        };
     }
-    Access { role: Role::Deny, user_id }
+    Access {
+        role: Role::Deny,
+        user_id,
+    }
 }
 
 /// Load a Yjs update (V1) from OctoBase pg store and apply it into `doc`.
@@ -323,7 +371,12 @@ async fn octobase_load(pg: &sqlx::postgres::PgPool, key: &str, doc: &Doc) -> Opt
 
 /// Debounced flush task per room: on trigger, wait out the window, then
 /// encode the full doc state and upsert into OctoBase pg store.
-async fn flush_task(state: AppState, room_id: RoomId, doc: Arc<Doc>, mut rx: mpsc::UnboundedReceiver<()>) {
+async fn flush_task(
+    state: AppState,
+    room_id: RoomId,
+    doc: Arc<Doc>,
+    mut rx: mpsc::UnboundedReceiver<()>,
+) {
     loop {
         if rx.recv().await.is_none() {
             break; // room dropped
@@ -384,7 +437,11 @@ impl AppState {
         }
         let (tx, _) = broadcast::channel(1024);
         let (flush_tx, flush_rx) = mpsc::unbounded_channel();
-        let room = Room { doc: doc.clone(), tx, flush_tx };
+        let room = Room {
+            doc: doc.clone(),
+            tx,
+            flush_tx,
+        };
         self.rooms.insert(room_id.to_string(), room.clone());
         let st = self.clone();
         let rid = room_id.to_string();
@@ -414,7 +471,8 @@ async fn http_get_doc(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let Some(identity) = verify_credential(&state.auth, extract_credential(&headers).as_deref()) else {
+    let Some(identity) = verify_credential(&state.auth, extract_credential(&headers).as_deref())
+    else {
         return (StatusCode::UNAUTHORIZED, "missing or invalid credential").into_response();
     };
     let (room_key, doc_id) = room_doc_ids(&format!("workspace:{}", id));
@@ -451,7 +509,8 @@ async fn http_put_doc(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "empty").into_response();
     }
-    let Some(identity) = verify_credential(&state.auth, extract_credential(&headers).as_deref()) else {
+    let Some(identity) = verify_credential(&state.auth, extract_credential(&headers).as_deref())
+    else {
         return (StatusCode::UNAUTHORIZED, "missing or invalid credential").into_response();
     };
     let (room_key, doc_id) = room_doc_ids(&format!("workspace:{}", id));
@@ -500,7 +559,11 @@ async fn http_put_doc(
         let _ = room.tx.send(fwd);
         let _ = room.flush_tx.send(()); // OctoBase persist (debounced)
         info!(id=%id, user=%access.user_id, role=%access.role_name(), agent=%agent, bytes=%body.len(), "http PUT /api/workspace/:id/doc via y-octo");
-        return (StatusCode::OK, axum::Json(serde_json::json!({ "id": id, "agent": agent, "bytes": body.len() }))).into_response();
+        return (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "id": id, "agent": agent, "bytes": body.len() })),
+        )
+            .into_response();
     }
     (StatusCode::BAD_REQUEST, "invalid yjs update").into_response()
 }
@@ -550,7 +613,14 @@ async fn ws_handler_root(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws_handler(ws, headers, Path("default".to_string()), Query(params), State(state)).await
+    ws_handler(
+        ws,
+        headers,
+        Path("default".to_string()),
+        Query(params),
+        State(state),
+    )
+    .await
 }
 
 fn encode_var_uint(mut n: usize, out: &mut Vec<u8>) {
@@ -762,9 +832,15 @@ async fn main() {
         .route("/yjs", get(ws_handler_root))
         .route("/yjs/", get(ws_handler_root))
         .route("/yjs/:room", get(ws_handler))
-        .route("/api/workspace/:id/doc", get(http_get_doc).put(http_put_doc))
+        .route(
+            "/api/workspace/:id/doc",
+            get(http_get_doc).put(http_put_doc),
+        )
         // y-websocket compat: also handle /yjs/:room via http GET for fallback
-        .route("/api/workspace/:id/doc/", get(http_get_doc).put(http_put_doc))
+        .route(
+            "/api/workspace/:id/doc/",
+            get(http_get_doc).put(http_put_doc),
+        )
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());
@@ -774,7 +850,10 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3200);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("aivory-collab listening on {} (y-octo yrs compat, ws /yjs/:room)", addr);
+    info!(
+        "aivory-collab listening on {} (y-octo yrs compat, ws /yjs/:room)",
+        addr
+    );
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
