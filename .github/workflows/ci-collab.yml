@@ -1,0 +1,50 @@
+name: collab-ci
+on:
+  push:
+    paths: ["collab/**", ".github/workflows/ci-collab.yml"]
+  pull_request:
+    paths: ["collab/**", ".github/workflows/ci-collab.yml"]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: collab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo check --locked
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo test --locked
+
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: workspace_collab
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: psql "$DATABASE_URL" -f collab/schema.sql
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/workspace_collab
+      - run: psql "$DATABASE_URL" -f collab/schema.sql
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/workspace_collab
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build ./collab

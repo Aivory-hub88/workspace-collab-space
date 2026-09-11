@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: workspace_collab
+    volumes:
+      - collab_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  collab:
+    build: .
+    ports:
+      - "3200:3200"
+    environment:
+      PORT: 3200
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/workspace_collab
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret}
+      COLLAB_SERVICE_TOKEN: ${COLLAB_SERVICE_TOKEN:-dev-only-token}
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  collab_pgdata:

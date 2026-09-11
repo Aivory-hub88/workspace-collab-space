@@ -1,0 +1,32 @@
+# Secrets — never commit real values (only *.example templates).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*service-account*.json
+*_sa_key.json
+secrets/
+.dump.sql
+*.dump
+
+# Rust
+target/
+Cargo.lock.bak
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local tooling
+*.log
+tmp/
