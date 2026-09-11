@@ -36,3 +36,6 @@ tmp/
 
 # Next.js build output
 .next/
+
+# Next.js generated
+next-env.d.ts
