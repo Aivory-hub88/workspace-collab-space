@@ -1,9 +1,5 @@
 name: workspace-ci
-on:
-  push:
-    paths: ["workspace/**", ".github/workflows/ci-workspace.yml"]
-  pull_request:
-    paths: ["workspace/**", ".github/workflows/ci-workspace.yml"]
+on: [push, pull_request]
 
 jobs:
   web:

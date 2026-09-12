@@ -1,9 +1,5 @@
 name: collab-ci
-on:
-  push:
-    paths: ["collab/**", ".github/workflows/ci-collab.yml"]
-  pull_request:
-    paths: ["collab/**", ".github/workflows/ci-collab.yml"]
+on: [push, pull_request]
 
 jobs:
   rust:
