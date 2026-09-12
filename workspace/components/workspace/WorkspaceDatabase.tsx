@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react"
 import * as Y from "yjs"
 import { WebsocketProvider } from "y-websocket"
-import { Table, Kanban, Plus, GripVertical, Calendar, User, Search, ArrowUpNarrowWide, BookmarkPlus, Trash2, Upload } from "lucide-react"
+import { Table, Kanban, Plus, GripVertical, Calendar, User, Search, ArrowUpNarrowWide, BookmarkPlus, Trash2, Upload, LayoutTemplate } from "lucide-react"
 import { collabAuthHeaders, collabWsParams, collabWsUrl } from "@/lib/collabClient"
 import { readCells, type FieldDef, type CellValue } from "@/lib/workspaceDbModel"
 
@@ -343,6 +343,14 @@ type DbTemplate = {
   description: string
 }
 
+// Built-in starter templates for the gallery (stateless — always available).
+const BUILT_IN_TEMPLATES: DbTemplate[] = [
+  { id: "builtin-bug", name: "Bug report", title: "", status: "Todo", priority: "High", assignee: "", due: "", description: "Steps to reproduce:\n1. \n2. \n\nExpected:\n\nActual:" },
+  { id: "builtin-sprint", name: "Sprint task", title: "", status: "Todo", priority: "Med", assignee: "", due: "", description: "Goal:\n\nAcceptance criteria:\n- " },
+  { id: "builtin-action", name: "Meeting action", title: "", status: "Todo", priority: "Med", assignee: "", due: "", description: "Context:\n\nOwner:\n\nDeadline:" },
+  { id: "builtin-spike", name: "Research spike", title: "", status: "Todo", priority: "Low", assignee: "", due: "", description: "Question:\n\nTimebox:\n\nFindings:\n" },
+]
+
 export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: string; readOnly?: boolean }) {
   const docRef = useRef<Y.Doc | null>(null)
   const yRowsRef = useRef<Y.Array<Y.Map<unknown>> | null>(null)
@@ -369,6 +377,9 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   // Board grouping: status (default kanban) | assignee (workload) | priority.
   // Session-only; saved views keep controlling filters/sort.
   const [groupBy, setGroupBy] = useState<"status" | "assignee" | "priority">("status")
+  // Swimlanes (status board only): second dimension splitting columns into lanes.
+  const [laneBy, setLaneBy] = useState<"none" | "assignee" | "priority">("none")
+  const [quickLane, setQuickLane] = useState<string | null>(null)
   // CSV import (via REST so WIP limits + activity apply per row).
   const [importing, setImporting] = useState(false)
   const importRef = useRef<HTMLInputElement | null>(null)
@@ -386,6 +397,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   }, [readOnly])
   // Load persisted saved views + row templates from pg props.
   const [templates, setTemplates] = useState<DbTemplate[]>([])
+  const [showGallery, setShowGallery] = useState(false)
   // Custom fields (Fase 3b): definitions in pg props.dbFields, values in row cells.
   const [fields, setFields] = useState<FieldDef[]>([])
   const [showFields, setShowFields] = useState(false)
@@ -712,7 +724,12 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     if (!yRows || !doc) return
     const extra: Partial<Row> =
       groupBy === "status"
-        ? { status: quickStatus }
+        ? {
+            status: quickStatus,
+            // Swimlane carry-over: new cards inherit the lane they were added in.
+            ...(laneBy === "assignee" && quickLane !== null ? { assignee: quickLane } : {}),
+            ...(laneBy === "priority" && quickLane !== null ? { priority: quickLane as Row["priority"] } : {}),
+          }
         : groupBy === "assignee"
           ? { status: "Todo", assignee: quickStatus }
           : { status: "Todo", priority: quickStatus as Row["priority"] }
@@ -720,6 +737,23 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     doc.transact(() => yRows.push([yMapFromRow(r)]), agentOrigin())
     setQuickTitle("")
     setQuickStatus(null)
+    setQuickLane(null)
+  }
+
+  // Swimlane partition for the status board (assignee lanes incl. Unassigned).
+  const swimlanes = (): Array<{ key: string; label: string }> => {
+    if (laneBy === "assignee") {
+      const names = Array.from(new Set(filtered.map((r) => r.assignee.trim()).filter(Boolean))).sort().slice(0, 8)
+      return [...names.map((n) => ({ key: n, label: assigneeLabel(n) })), { key: "", label: "Unassigned" }]
+    }
+    if (laneBy === "priority") return [...PRIORITIES].reverse().map((p) => ({ key: p, label: `${p} priority` }))
+    return [{ key: "", label: "" }]
+  }
+
+  const laneOf = (r: Row): string => {
+    if (laneBy === "assignee") return r.assignee.trim()
+    if (laneBy === "priority") return r.priority
+    return ""
   }
 
   const groupKeyOf = (r: Row): string => {
@@ -782,6 +816,26 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
       }
     }
     updateRow(id, dropPatch(key))
+  }
+
+  // Calendar drag: drop a card on a day to (re)schedule it. Same Yjs path
+  // as the date input — no server round-trip needed for the move itself.
+  const onDropDay = (e: React.DragEvent, iso: string) => {
+    e.preventDefault()
+    const id = e.dataTransfer.getData("text/plain")
+    if (!id || !guard()) return
+    const row = rows.find((r) => r.id === id)
+    if (!row || row.due === iso) return
+    updateRow(id, { due: iso })
+  }
+
+  const onDropUndated = (e: React.DragEvent) => {
+    e.preventDefault()
+    const id = e.dataTransfer.getData("text/plain")
+    if (!id || !guard()) return
+    const row = rows.find((r) => r.id === id)
+    if (!row || !row.due) return
+    updateRow(id, { due: "" })
   }
 
   const addComment = () => {
@@ -1073,6 +1127,16 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
               </select>
             )}
             {!readOnly && (
+              <button
+                onClick={() => setShowGallery(true)}
+                title="Browse task templates"
+                className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.04] px-4 py-2 text-[12.5px] font-medium text-white/70 hover:bg-white/[0.08] hover:text-white"
+              >
+                <LayoutTemplate className="h-3.5 w-3.5" />
+                Gallery
+              </button>
+            )}
+            {!readOnly && (
               <>
                 <button
                   onClick={() => setShowFields((v) => !v)}
@@ -1293,7 +1357,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             {(["status", "assignee", "priority"] as const).map((g) => (
               <button
                 key={g}
-                onClick={() => { setGroupBy(g); setQuickStatus(null); setQuickTitle("") }}
+                onClick={() => { setGroupBy(g); setQuickStatus(null); setQuickTitle(""); setQuickLane(null) }}
                 title={g === "status" ? "Group by status" : g === "assignee" ? "Group by assignee (workload)" : "Group by priority"}
                 className={`rounded-full px-3 py-1 text-[12px] font-medium capitalize transition ${groupBy === g ? "bg-white text-black" : "text-white/40 hover:text-white/70"}`}
               >
@@ -1301,9 +1365,34 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
               </button>
             ))}
           </div>
+          {groupBy === "status" && (
+          <div className="mb-3 flex items-center gap-1 self-start rounded-full bg-white/[0.04] p-1">
+            {(["none", "assignee", "priority"] as const).map((l) => (
+              <button
+                key={l}
+                onClick={() => { setLaneBy(l); setQuickStatus(null); setQuickTitle(""); setQuickLane(null) }}
+                title={l === "none" ? "No swimlanes" : l === "assignee" ? "Swimlanes by assignee" : "Swimlanes by priority"}
+                className={`rounded-full px-3 py-1 text-[12px] transition ${laneBy === l ? "bg-white font-medium text-black" : "text-white/40 hover:text-white/70"}`}
+              >
+                {l === "none" ? "No lanes" : l === "assignee" ? "Assignee lanes" : "Priority lanes"}
+              </button>
+            ))}
+          </div>
+          )}
+          {swimlanes().map((lane) => {
+            const laneRows = laneBy === "none" || groupBy !== "status" ? filtered : filtered.filter((r) => laneOf(r) === lane.key)
+            return (
+            <div key={lane.key || "__all__"} className={laneBy !== "none" && groupBy === "status" ? "mb-5 last:mb-0" : ""}>
+              {laneBy !== "none" && groupBy === "status" && (
+                <div className="mb-2 flex items-center gap-2 px-1">
+                  {laneBy === "assignee" ? <User className="h-3 w-3 text-white/40" /> : null}
+                  <span className="text-[12px] font-medium text-white/60">{lane.label || "Unassigned"}</span>
+                  <span className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[11px] font-medium text-white/40">{laneRows.length}</span>
+                </div>
+              )}
           <div className="grid auto-cols-[minmax(220px,1fr)] grid-flow-col gap-4 overflow-x-auto pb-2">
           {boardColumns().map(({ key: s, label }) => {
-            const inCol = filtered.filter((r) => groupKeyOf(r) === s)
+            const inCol = laneRows.filter((r) => groupKeyOf(r) === s)
             const limit = groupBy === "status" ? wip[s] : undefined
             const over = limit !== undefined && inCol.length > limit
             return (
@@ -1380,7 +1469,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                     </div>
                   ))}
                 {!readOnly && (
-                  quickStatus === s ? (
+                  quickStatus === s && (laneBy === "none" || groupBy !== "status" || quickLane === lane.key) ? (
                     <div className="flex items-center gap-1.5 rounded-[12px] border border-white/15 bg-white/[0.03] p-2">
                       <input
                         autoFocus
@@ -1388,7 +1477,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                         onChange={(e) => setQuickTitle(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") quickAddRow()
-                          if (e.key === "Escape") { setQuickStatus(null); setQuickTitle("") }
+                          if (e.key === "Escape") { setQuickStatus(null); setQuickTitle(""); setQuickLane(null) }
                         }}
                         placeholder={`New in ${s || "Unassigned"}…`}
                         className="min-w-0 flex-1 bg-transparent px-1.5 py-1 text-[12px] text-white/80 placeholder:text-white/25 outline-none"
@@ -1399,7 +1488,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                     </div>
                   ) : (
                     <button
-                      onClick={() => { setQuickStatus(s); setQuickTitle("") }}
+                      onClick={() => { setQuickStatus(s); setQuickTitle(""); setQuickLane(lane.key) }}
                       className="flex items-center justify-center gap-1.5 rounded-[12px] border border-dashed border-white/10 py-2.5 text-[12px] text-white/30 hover:border-white/15 hover:bg-white/[0.02] hover:text-white/50"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -1411,7 +1500,10 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             </div>
           )
           })}
-        </div>
+          </div>
+            </div>
+            )
+          })}
         </>
       ) : (
         <div className="rounded-[14px] border border-line bg-surface-1 p-4">
@@ -1432,11 +1524,23 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
               const iso = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`
               const items = filtered.filter((r) => r.due === iso)
               return (
-                <div key={d} className="min-h-[88px] rounded-[10px] border border-line bg-white/[0.02] p-1.5">
+                <div
+                  key={d}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => onDropDay(e, iso)}
+                  className="min-h-[88px] rounded-[10px] border border-line bg-white/[0.02] p-1.5"
+                >
                   <div className="text-[11px] font-medium text-white/40">{d}</div>
                   <div className="mt-1 flex flex-col gap-1">
                     {items.map((r) => (
-                      <div key={r.id} className="truncate rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-black">
+                      <div
+                        key={r.id}
+                        draggable={!readOnly}
+                        onDragStart={(e) => e.dataTransfer.setData("text/plain", r.id)}
+                        onClick={() => setSelectedId(r.id)}
+                        title="Open row detail"
+                        className="truncate rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-black hover:bg-white/85"
+                      >
                         {r.title || "Untitled"}
                       </div>
                     ))}
@@ -1446,13 +1550,24 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             })}
           </div>
           {filtered.filter((r) => !r.due).length > 0 && (
-            <div className="mt-4 border-t border-line pt-3">
-              <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-white/30">Undated</div>
+            <div
+              className="mt-4 border-t border-line pt-3"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={onDropUndated}
+            >
+              <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-white/30">Undated — drop here to unschedule</div>
               <div className="flex flex-wrap gap-1.5">
                 {filtered
                   .filter((r) => !r.due)
                   .map((r) => (
-                    <span key={r.id} className="rounded-full border border-line bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/60">
+                    <span
+                      key={r.id}
+                      draggable={!readOnly}
+                      onDragStart={(e) => e.dataTransfer.setData("text/plain", r.id)}
+                      onClick={() => setSelectedId(r.id)}
+                      title="Open row detail"
+                      className="cursor-grab rounded-full border border-line bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/60 hover:bg-white/[0.08] active:cursor-grabbing"
+                    >
                       {r.title || "Untitled"}
                     </span>
                   ))}
@@ -1590,6 +1705,62 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template gallery — starters plus saved customs. Save customs from any row's drawer. */}
+      {showGallery && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]" onClick={() => setShowGallery(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="max-h-[80vh] w-full max-w-[560px] overflow-y-auto rounded-2xl border border-line bg-[#1a1a18] p-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <span className="text-[14px] font-medium text-white/85">Template gallery</span>
+              <button onClick={() => setShowGallery(false)} className="rounded-full bg-white/[0.06] px-3 py-1 text-[12px] text-white/60 hover:bg-white/[0.10]">Close</button>
+            </div>
+            <div className="mt-4 text-[11px] font-medium uppercase tracking-wider text-white/30">Starters</div>
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {BUILT_IN_TEMPLATES.map((t) => (
+                <div key={t.id} className="rounded-xl border border-line bg-white/[0.02] p-3">
+                  <div className="text-[13px] font-medium text-white/80">{t.name}</div>
+                  <div className="mt-0.5 text-[11px] text-white/30">{t.priority} priority · {t.status}</div>
+                  <button
+                    onClick={() => { useTemplate(t); setShowGallery(false) }}
+                    className="mt-2.5 w-full rounded-full bg-white px-3 py-1.5 text-[12px] font-medium text-black hover:bg-white/90"
+                  >
+                    Use template
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 text-[11px] font-medium uppercase tracking-wider text-white/30">Yours · {templates.length}</div>
+            {templates.length === 0 ? (
+              <div className="mt-2 rounded-xl border border-dashed border-white/10 py-5 text-center text-[12px] text-white/30">
+                No custom templates — open any row and “Save as template”.
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-col gap-1.5">
+                {templates.map((t) => (
+                  <div key={t.id} className="group flex items-center justify-between gap-2 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-white/70">{t.name}</span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      <button
+                        onClick={() => { useTemplate(t); setShowGallery(false) }}
+                        className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black hover:bg-white/90"
+                      >
+                        Use
+                      </button>
+                      <button
+                        onClick={() => { void persistTemplates(templates.filter((x) => x.id !== t.id)) }}
+                        title="Delete template"
+                        className="rounded px-1.5 py-0.5 text-[12px] text-white/20 opacity-0 hover:text-red-300 group-hover:opacity-100"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

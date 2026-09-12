@@ -164,7 +164,7 @@ function blockClass(type: BlockType) {
   return "text-[14px] leading-relaxed text-white/80"
 }
 
-export default function WorkspaceEditor({ docId, readOnly = false, onTextChange }: { docId: string; readOnly?: boolean; onTextChange?: (text: string) => void }) {
+export default function WorkspaceEditor({ docId, readOnly = false, onTextChange, registerImport }: { docId: string; readOnly?: boolean; onTextChange?: (text: string) => void; registerImport?: (fn: (blocks: Array<{ type: BlockType; text: string; checked?: boolean }>) => number) => void }) {
   const docRef = useRef<Y.Doc | null>(null)
   const yArrayRef = useRef<Y.Array<Y.Map<unknown>> | null>(null)
   const providerRef = useRef<WebsocketProvider | null>(null)
@@ -327,6 +327,38 @@ export default function WorkspaceEditor({ docId, readOnly = false, onTextChange 
   }, [docId, storageKey])
 
   const guard = () => !readOnlyRef.current
+
+  // Markdown/file import entry point (registered to the parent once the doc
+  // is live). Appends blocks — or replaces the untouched starter content.
+  // Returns the number of blocks inserted.
+  const importBlocks = (incoming: Array<{ type: BlockType; text: string; checked?: boolean }>): number => {
+    if (!guard() || incoming.length === 0) return 0
+    const yArray = yArrayRef.current
+    const doc = docRef.current
+    if (!yArray || !doc) return 0
+    const current = toBlocks(yArray)
+    const isStarter = current.length > 0 && current.every((b) => b.text === "")
+    const maps = incoming.slice(0, 500).map((b) =>
+      yMapFromBlock({
+        id: uid(),
+        type: b.type,
+        text: b.text.slice(0, 2000),
+        ...(b.type === "todo" ? { checked: b.checked === true } : {}),
+      }),
+    )
+    if (maps.length === 0) return 0
+    doc.transact(() => {
+      if (isStarter) yArray.delete(0, yArray.length)
+      yArray.push(maps)
+    }, agentOrigin())
+    return maps.length
+  }
+
+  const importRef = useRef(importBlocks)
+  importRef.current = importBlocks
+  useEffect(() => {
+    registerImport?.((blocks) => importRef.current(blocks))
+  }, [registerImport, docId])
 
   const update = (index: number, patch: Partial<Block>) => {
     if (!guard()) return

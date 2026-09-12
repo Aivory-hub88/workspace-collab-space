@@ -2,7 +2,7 @@
 
 import { useParams, useSearchParams, useRouter } from "next/navigation"
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor"
 import WorkspaceDatabase from "@/components/workspace/WorkspaceDatabase"
 import ProjectBoard from "@/components/workspace/ProjectBoard"
@@ -13,9 +13,10 @@ import WorkspaceHistory from "@/components/workspace/WorkspaceHistory"
 import SharingPanel from "@/components/workspace/SharingPanel"
 import WorkspaceNavigator from "@/components/workspace/WorkspaceNavigator"
 import { clearClientAuthSession, collabAuthHeaders } from "@/lib/collabClient"
+import { parseMarkdown, type ImportedBlock } from "@/lib/markdownImport"
 import { getMarketingUrl } from "@/lib/config"
 import { useWorkspaceContext } from "@/contexts/WorkspaceContext"
-import { Share2, Star, Trash2, Download, FileDown, Presentation } from "lucide-react"
+import { Share2, Star, Trash2, Download, FileDown, Presentation, Upload } from "lucide-react"
 
 type Meta = {
   id: string
@@ -56,6 +57,32 @@ export default function WorkspaceDocPage() {
   const [showIconPicker, setShowIconPicker] = useState(false)
   const [aiDocText, setAiDocText] = useState("")
   const [showExport, setShowExport] = useState(false)
+  // Markdown import plumbing: the editor registers its importer once live.
+  const importFnRef = useRef<((blocks: ImportedBlock[]) => number) | null>(null)
+  const importFileRef = useRef<HTMLInputElement | null>(null)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
+
+  const handleImportFile = async (f: File | undefined) => {
+    if (!f || !canWrite) return
+    setImportMsg(null)
+    try {
+      const text = await f.text()
+      const blocks = parseMarkdown(text).slice(0, 500)
+      if (blocks.length === 0) {
+        setImportMsg("No importable content found.")
+        return
+      }
+      const fn = importFnRef.current
+      if (!fn) {
+        setImportMsg("Editor is still loading — try again in a moment.")
+        return
+      }
+      const n = fn(blocks)
+      setImportMsg(`Imported ${n} block${n === 1 ? "" : "s"} from ${f.name}.`)
+    } catch {
+      setImportMsg("Could not read that file.")
+    }
+  }
   const [present, setPresent] = useState(false)
   const loginUrl = `${getMarketingUrl()}/login`
   const { setActiveWorkspaceId } = useWorkspaceContext()
@@ -373,6 +400,27 @@ export default function WorkspaceDocPage() {
               >
                 <Download className="h-3.5 w-3.5" /> Export
               </button>
+              {view === "page" && canWrite && (
+                <>
+                  <input
+                    ref={importFileRef}
+                    type="file"
+                    accept=".md,.markdown,text/markdown"
+                    className="hidden"
+                    onChange={(e) => {
+                      void handleImportFile(e.target.files?.[0])
+                      e.target.value = ""
+                    }}
+                  />
+                  <button
+                    onClick={() => importFileRef.current?.click()}
+                    title="Import Markdown file"
+                    className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] text-white/35 hover:bg-white/[0.06] hover:text-white/80"
+                  >
+                    <Upload className="h-3.5 w-3.5" /> Import
+                  </button>
+                </>
+              )}
               {showExport && (
                 <div className="absolute right-0 top-full z-20 mt-2 w-[200px] rounded-2xl border border-line bg-[#1e1e1c] p-2 shadow-2xl">
                   <button
@@ -590,7 +638,14 @@ export default function WorkspaceDocPage() {
           ) : view === "database" ? (
             <WorkspaceDatabase docId={id} readOnly={!canWrite} />
           ) : (
-            <WorkspaceEditor docId={id} readOnly={!canWrite} onTextChange={setAiDocText} />
+            <>
+                {importMsg && (
+                  <div className="mx-auto mb-4 w-full max-w-[960px] rounded-xl border border-line bg-white/[0.04] px-4 py-2.5 text-[12px] text-white/60">
+                    {importMsg}
+                  </div>
+                )}
+                <WorkspaceEditor docId={id} readOnly={!canWrite} onTextChange={setAiDocText} registerImport={(fn) => { importFnRef.current = fn }} />
+              </>
           )}
           {view === "page" && (
             <>
