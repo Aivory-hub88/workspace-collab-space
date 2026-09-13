@@ -57,12 +57,10 @@ export default function SharingPanel({ docId, isOwner }: { docId: string; isOwne
   const invite = async () => {
     if (!email.trim()) return
     setMsg(null)
-    // User ID invites always work; email invites need a configured directory.
-    const idOrEmail = email.trim()
     const r = await fetch(`/api/workspace/${docId}/acl`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...collabAuthHeaders() },
-      body: JSON.stringify(idOrEmail.includes('@') ? { email: idOrEmail, role } : { userId: idOrEmail, role }),
+      body: JSON.stringify({ email: email.trim(), role }),
     })
     const j = await r.json().catch(() => ({}))
     if (r.ok) {
@@ -113,7 +111,7 @@ export default function SharingPanel({ docId, isOwner }: { docId: string; isOwne
 
   if (!isOwner) {
     return (
-      <div className="rounded-xl border border-line bg-white/[0.03] p-4">
+      <div className="rounded-xl bg-white/[0.08] p-4">
         <div className="text-[12px] font-medium text-white/70">Shared with</div>
         <div className="mt-2 text-[12px] text-white/40">
           {acl.length === 0 && agents.length === 0
@@ -150,7 +148,7 @@ export default function SharingPanel({ docId, isOwner }: { docId: string; isOwne
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') invite() }}
-          placeholder="User ID (or email, if directory configured)"
+          placeholder="email@aivory.id"
           className="w-full rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[13px] text-white/80 placeholder:text-white/30 outline-none"
         />
         <div className="flex gap-2">
@@ -220,27 +218,29 @@ export default function SharingPanel({ docId, isOwner }: { docId: string; isOwne
         viewers read only. Revoking cuts access immediately.
       </div>
       <div className="mt-3 flex flex-col gap-2">
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2">
           <select
             value={agentType}
             onChange={(e) => setAgentType(e.target.value)}
-            className="flex-1 rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70"
+            className="w-full rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70"
           >
             {AGENT_OPTIONS.map((a) => (
               <option key={a.type} value={a.type}>{a.name} · {a.type}</option>
             ))}
           </select>
-          <select
-            value={agentRole}
-            onChange={(e) => setAgentRole(e.target.value as any)}
-            className="rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70"
-          >
-            <option value="editor">editor</option>
-            <option value="viewer">viewer</option>
-          </select>
-          <button onClick={inviteAgent} className="rounded-full bg-white px-4 py-1.5 text-[12px] font-medium text-black hover:bg-white/90">
-            Invite
-          </button>
+          <div className="flex gap-2">
+            <select
+              value={agentRole}
+              onChange={(e) => setAgentRole(e.target.value as any)}
+              className="flex-1 rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70"
+            >
+              <option value="editor">editor</option>
+              <option value="viewer">viewer</option>
+            </select>
+            <button onClick={inviteAgent} className="shrink-0 rounded-full bg-white px-4 py-1.5 text-[12px] font-medium text-black hover:bg-white/90">
+              Invite
+            </button>
+          </div>
         </div>
       </div>
       {msg && <div className="mt-2 text-[11px] text-white/50">{msg}</div>}

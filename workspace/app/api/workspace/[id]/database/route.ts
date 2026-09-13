@@ -13,10 +13,13 @@ import {
   getFieldDefs,
   cleanCells,
   wipExceeded,
+  withResolvedRollups,
   MAX_DESCRIPTION_LEN,
   type DbRow,
 } from "@/lib/workspaceDb"
 import { recordWorkspaceActivity } from "@/lib/workspaceActivity"
+import { indexRow, rowText, workspaceOf } from "@/lib/workspaceIndex"
+import { getAutomationRules, runStatusAutomations } from "@/lib/workspaceAutomations"
 
 export const runtime = "nodejs"
 
@@ -44,7 +47,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const allowPg = cred.kind === "service" ? true : await authorizeDocFallback(cred, id)
     const doc = await loadDbDoc(id, cred, agent ?? undefined, allowPg)
-    return NextResponse.json({ id, rows: rowsFromDbDoc(doc) })
+    const rows = await withResolvedRollups(rowsFromDbDoc(doc), await getFieldDefs(id), cred, agent ?? undefined, allowPg)
+    return NextResponse.json({ id, rows })
   } catch (e) {
     if (e instanceof WorkspaceDenied) return NextResponse.json({ error: "forbidden" }, { status: e.status })
     console.error("[workspace/database GET]", e)
@@ -83,6 +87,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       cells: cleanCells(body.cells, await getFieldDefs(id)),
     }
     doc.transact(() => doc.getArray<Y.Map<unknown>>("database").push([dbRowToYMap(newRow)]), agentType)
+    const actorName = cred.kind === "service" ? agentType.replace(/_/g, " ") : (cred.user.email ?? cred.user.user_id)
+    const automated = await runStatusAutomations({
+      doc,
+      rowId: newRow.id,
+      prevStatus: null,
+      wipLimits: await getWipLimits(id),
+      actorName,
+      origin: agentType,
+      getRules: () => getAutomationRules(id),
+    })
     await saveDbDoc(id, doc, cred, agentType)
     await recordWorkspaceActivity({
       docId: id,
@@ -94,7 +108,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       targetId: newRow.id,
       metadata: { status: newRow.status, priority: newRow.priority, assignee: newRow.assignee, due: newRow.due },
     })
-    return NextResponse.json({ id: newRow.id, row: newRow, agentType }, { status: 201 })
+    if (automated.length > 0) {
+      await recordWorkspaceActivity({
+        docId: id,
+        credential: cred,
+        agentType,
+        action: 'database.automation',
+        summary: `Automation ran on task ${newRow.id}: ${automated.map((a) => a.ruleName).join(", ")}`,
+        targetType: 'database-row',
+        targetId: newRow.id,
+        metadata: { applied: automated },
+      })
+    }
+    const [resolved] = await withResolvedRollups([newRow], await getFieldDefs(id), cred, agentType, allowPg)
+    // Semantic index (best-effort, never blocks the response).
+    void indexRow(id, newRow.id, await workspaceOf(id), rowText(newRow)).catch(() => {})
+    return NextResponse.json({ id: newRow.id, row: resolved ?? newRow, agentType }, { status: 201 })
   } catch (e) {
     if (e instanceof WorkspaceDenied) return NextResponse.json({ error: "forbidden" }, { status: e.status })
     console.error("[workspace/database POST]", e)

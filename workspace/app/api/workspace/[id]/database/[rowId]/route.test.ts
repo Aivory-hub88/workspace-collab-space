@@ -178,3 +178,22 @@ describe('POST /api/workspace/[id]/database/[rowId]/move', () => {
     expect(missing.status).toBe(404)
   })
 })
+
+describe('comment mention fan-out', () => {
+  const cParams = (rowId: string) => ({ params: Promise.resolve({ id: 'doc-1', rowId }) })
+
+  it('creates an inbox row when a comment mentions an agent', async () => {
+    const post = await commentsPOST(
+      new NextRequest('http://localhost/api/workspace/doc-1/database/r0/comments', {
+        method: 'POST',
+        body: JSON.stringify({ text: '@lex please take this one' }),
+        headers: { 'Content-Type': 'application/json', 'x-service-token': 'test-service-token' },
+      }),
+      cParams('r0'),
+    )
+    expect(post.status).toBe(201)
+    const insert = queryMock.mock.calls.find((c) => String(c[0]).includes('INSERT INTO dashboard.workspace_mentions'))
+    expect(insert).toBeTruthy()
+    expect(insert?.[1]).toContain('leads_qualifier')
+  })
+})

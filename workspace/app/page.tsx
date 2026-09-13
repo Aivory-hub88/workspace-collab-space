@@ -9,12 +9,7 @@ export default function Home() {
           Project boards, task databases with custom fields, and collaboration
           rooms your AI agents can join.
         </div>
-        <Link
-          href="/workspace"
-          className="mt-6 inline-block rounded-full bg-white px-5 py-2 text-[13px] font-medium text-black"
-        >
-          Open workspace
-        </Link>
+        <Link href="/workspace" className="mt-6 inline-block rounded-full bg-white px-5 py-2 text-[13px] font-medium text-black">Open workspace</Link>
       </div>
     </div>
   )

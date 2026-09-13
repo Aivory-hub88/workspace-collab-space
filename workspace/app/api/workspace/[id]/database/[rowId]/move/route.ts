@@ -11,6 +11,7 @@ import {
   wipExceeded,
 } from "@/lib/workspaceDb"
 import { recordWorkspaceActivity } from "@/lib/workspaceActivity"
+import { getAutomationRules, runStatusAutomations } from "@/lib/workspaceAutomations"
 
 export const runtime = "nodejs"
 
@@ -50,6 +51,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "wip-exceeded", limit: limited }, { status: 409 })
     }
     doc.transact(() => m.set("status", status), agentType)
+    const actorName = cred.kind === "service" ? agentType.replace(/_/g, " ") : (cred.user.email ?? cred.user.user_id)
+    const automated = await runStatusAutomations({
+      doc,
+      rowId,
+      prevStatus: from,
+      wipLimits: await getWipLimits(id),
+      actorName,
+      origin: agentType,
+      getRules: () => getAutomationRules(id),
+    })
     await saveDbDoc(id, doc, cred, agentType)
     await recordWorkspaceActivity({
       docId: id,
@@ -61,7 +72,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       targetId: rowId,
       metadata: { from, to: status },
     })
-    return NextResponse.json({ id: rowId, status, moved: true, from })
+    if (automated.length > 0) {
+      await recordWorkspaceActivity({
+        docId: id,
+        credential: cred,
+        agentType,
+        action: "database.automation",
+        summary: `Automation ran on task ${rowId}: ${automated.map((a) => a.ruleName).join(", ")}`,
+        targetType: "database-row",
+        targetId: rowId,
+        metadata: { applied: automated },
+      })
+    }
+    return NextResponse.json({ id: rowId, status, moved: true, from, automated: automated.length > 0 ? automated : undefined })
   } catch (e) {
     if (e instanceof WorkspaceDenied) return NextResponse.json({ error: "forbidden" }, { status: e.status })
     console.error("[workspace/move POST]", e)

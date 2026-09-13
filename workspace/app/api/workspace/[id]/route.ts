@@ -3,6 +3,7 @@ import { query } from '@/lib/db'
 import { workspaceCredential, unauthorized, forbidden } from '@/lib/workspaceAuth'
 import { getDocRole, canWrite } from '@/lib/workspaceAccess'
 import { parseFieldDefs } from '@/lib/workspaceDb'
+import { parseAutomationRules } from '@/lib/workspaceDbModel'
 import { recordWorkspaceActivity } from '@/lib/workspaceActivity'
 
 export const runtime = 'nodejs'
@@ -111,6 +112,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const kinds = new Set(["table","kanban","calendar"])
       const sortFields = new Set(["title","status","priority","due","assignee"])
       const sortDirs = new Set(["asc","desc"])
+      const dueFilters = new Set(["All","Overdue","Today","This week","Next 7 days","No date"])
       const cleanedViews: unknown[] = []
       for (const v of src.dbViews.slice(0, 10)) {
         if (!v || typeof v !== "object") continue
@@ -123,7 +125,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         const q = typeof vv.q === "string" ? vv.q.slice(0, 64) : ""
         const sortField = sortFields.has(vv.sortField as string) ? (vv.sortField as string) : "title"
         const sortDir = sortDirs.has(vv.sortDir as string) ? (vv.sortDir as string) : "asc"
-        cleanedViews.push({ id, name, kind, statusFilter, priorityFilter, q, sortField, sortDir })
+        const dueFilter = dueFilters.has(vv.dueFilter as string) ? (vv.dueFilter as string) : "All"
+        cleanedViews.push({ id, name, kind, statusFilter, priorityFilter, q, sortField, sortDir, dueFilter })
       }
       propsPatch.dbViews = cleanedViews
     } else if (src.dbViews === undefined) {
@@ -164,6 +167,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         cleanedWip[key] = n
       }
       propsPatch.dbWip = cleanedWip
+    }
+    // Automation rules (Fase 4e): validated structurally here; the runner
+    // enforces WIP + writes activity at execution time.
+    if (Array.isArray(src.dbAutomations)) {
+      propsPatch.dbAutomations = parseAutomationRules(src.dbAutomations)
+    } else if (src.dbAutomations !== undefined) {
+      return NextResponse.json({ error: 'props.dbAutomations must be array' }, { status: 400 })
     }
     if (Object.keys(propsPatch).length === 0) {
       return NextResponse.json({ error: 'props has no known keys' }, { status: 400 })
@@ -232,6 +242,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       await query(`DELETE FROM dashboard.workspace_doc_acl WHERE doc_id = $1`, [id])
       await query(`DELETE FROM dashboard.workspace_access_requests WHERE doc_id = $1`, [id])
       await query(`DELETE FROM dashboard.workspace_doc_links WHERE src = $1 OR dst = $1`, [id])
+      await query(`DELETE FROM dashboard.workspace_agent_acl WHERE doc_id = $1`, [id])
+      await query(`DELETE FROM dashboard.workspace_mentions WHERE doc_id = $1`, [id])
+      await query(`DELETE FROM dashboard.workspace_chunks WHERE doc_id = $1`, [id])
     } else {
       await query(`UPDATE dashboard.workspace_docs SET deleted_at = now() WHERE id = ANY($1::text[]) AND deleted_at IS NULL`, [[id, `workspace:${id}`, `workspace:db:${id}`, `db:${id}`]])
     }
