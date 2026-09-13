@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { query } from "@/lib/db"
 import { workspaceCredential, unauthorized, forbidden } from "@/lib/workspaceAuth"
 import { canManageDoc } from "@/lib/workspaceAccess"
-import { getUserDirectory } from "@/lib/authProvider"
 
 export const runtime = "nodejs"
 
@@ -17,9 +16,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!(await canManageDoc(id, accountType, userId))) return forbidden()
   try {
     const r = await query(
-      `SELECT doc_id, user_id, role, granted_by, created_at
-       FROM dashboard.workspace_doc_acl
-       WHERE doc_id = $1 ORDER BY created_at`,
+      `SELECT a.doc_id, a.user_id, a.role, a.granted_by, a.created_at, u.email, u.full_name
+       FROM dashboard.workspace_doc_acl a
+       LEFT JOIN identity.users u ON u.id = a.user_id
+       WHERE a.doc_id = $1 ORDER BY a.created_at`,
       [id],
     )
     return NextResponse.json({ doc_id: id, grants: r.rows })
@@ -48,14 +48,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   let targetId = body.userId?.toString().trim()
   if (!targetId) {
-    // Email invites need a configured user directory (see lib/authProvider);
-    // userId invites always work.
     const email = (body.email ?? "").toString().trim().toLowerCase()
     if (!email) return NextResponse.json({ error: "email or userId required" }, { status: 400 })
     try {
-      const hit = await getUserDirectory().findByEmail(email)
-      if (!hit) return NextResponse.json({ error: "user not found" }, { status: 404 })
-      targetId = hit.id
+      const r = await query("SELECT id FROM identity.users WHERE lower(email) = $1", [email])
+      if (r.rows.length === 0) return NextResponse.json({ error: "user not found" }, { status: 404 })
+      targetId = r.rows[0].id as string
     } catch {
       return NextResponse.json({ error: "db" }, { status: 500 })
     }

@@ -22,9 +22,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!(await isDocManager(id, cred))) return forbidden()
   try {
     const r = await query(
-      `SELECT id, doc_id, requester_id, requester_email, role_requested, status, created_at
-       FROM dashboard.workspace_access_requests
-       WHERE doc_id = $1 ORDER BY created_at DESC`,
+      `SELECT r.id, r.doc_id, r.requester_id, r.requester_email, r.role_requested, r.status, r.created_at, u.email as user_email, u.full_name
+       FROM dashboard.workspace_access_requests r
+       LEFT JOIN identity.users u ON u.id = r.requester_id
+       WHERE r.doc_id = $1 ORDER BY r.created_at DESC`,
       [id],
     )
     return NextResponse.json({ doc_id: id, requests: r.rows })

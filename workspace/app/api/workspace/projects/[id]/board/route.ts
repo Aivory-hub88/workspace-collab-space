@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { query } from "@/lib/db"
 import { workspaceCredential, authorizeDocFallback, unauthorized, forbidden } from "@/lib/workspaceAuth"
-import { getDocRole, canRead, getAgentDocRole, isKnownAgentType } from "@/lib/workspaceAccess"
+import { canReadDocId, isKnownAgentType } from "@/lib/workspaceAccess"
 import { projectMemberDocs, legacyDocId } from "@/lib/workspaceDoc"
-import { loadDbDoc, rowsFromDbDoc, getWipLimits, WorkspaceDenied, type DbRow } from "@/lib/workspaceDb"
+import { loadDbDoc, rowsFromDbDoc, getWipLimits, getFieldDefs, withResolvedRollups, WorkspaceDenied, type DbRow } from "@/lib/workspaceDb"
 
 export const runtime = "nodejs"
 
@@ -30,13 +30,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const agent = req.headers.get("x-agent-type") ?? undefined
   const assertedAgent = cred.kind === "service" && isKnownAgentType(agent) ? agent : undefined
 
-  const canReadDoc = async (docId: string): Promise<boolean> => {
-    if (cred.kind === "service") {
-      if (!assertedAgent) return true
-      return canRead(await getAgentDocRole(docId, assertedAgent))
-    }
-    return canRead(await getDocRole(cred, docId))
-  }
+  const canReadDoc = (docId: string): Promise<boolean> => canReadDocId(cred, docId, assertedAgent)
 
   try {
     // Project doc row (bare or room-keyed).
@@ -87,7 +81,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       if (!(await canReadDoc(m))) continue
       try {
         const doc = await loadDbDoc(m, cred, assertedAgent, allowPg)
-        const rows = rowsFromDbDoc(doc)
+        const rows = (
+          await withResolvedRollups(rowsFromDbDoc(doc), await getFieldDefs(m), cred, assertedAgent, allowPg)
+        )
           .slice(0, MAX_ROWS_PER_DOC)
           .map((r) => ({ ...r, doc_id: m }))
         docs.push({ doc_id: m, title: titles.get(m) ?? m, wip: await getWipLimits(m), rows })

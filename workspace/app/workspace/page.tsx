@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation"
 import { Trash2 } from "lucide-react"
 import { clearClientAuthSession, collabAuthHeaders } from "@/lib/collabClient"
 import { getMarketingUrl } from "@/lib/config"
+import WorkspaceBell from "@/components/workspace/WorkspaceBell"
 
 type DocItem = { id: string; title: string; workspace_id: string; owner: string | null; updated_at: string | null; myRole: string }
+type SearchHit = { kind: "doc" | "row"; doc_id: string; doc_title: string; row_id?: string; title: string; snippet: string }
 
 export default function WorkspacePage() {
   const [docs, setDocs] = useState<DocItem[]>([])
@@ -22,8 +24,40 @@ export default function WorkspacePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [trashLoading, setTrashLoading] = useState(false)
+  const [hits, setHits] = useState<SearchHit[] | null>(null)
+  const [searching, setSearching] = useState(false)
   const router = useRouter()
   const loginUrl = `${getMarketingUrl()}/login`
+
+  // Unified search (docs + task rows, server-ranked) — debounced.
+  useEffect(() => {
+    const needle = q.trim()
+    if (needle.length < 2) {
+      setHits(null)
+      return
+    }
+    setSearching(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/workspace/search?q=${encodeURIComponent(needle)}&limit=8`, { headers: collabAuthHeaders() })
+        if (r.ok) {
+          const j = await r.json()
+          setHits(Array.isArray(j.hits) ? j.hits : [])
+        } else {
+          setHits(null)
+        }
+      } catch {
+        setHits(null)
+      }
+      setSearching(false)
+    }, 350)
+    return () => clearTimeout(t)
+  }, [q])
+
+  const goHit = (h: SearchHit) => {
+    setHits(null)
+    router.push(h.kind === "row" ? `/workspace/${h.doc_id}?view=database` : `/workspace/${h.doc_id}`)
+  }
 
   const load = async () => {
     setLoading(true)
@@ -150,15 +184,45 @@ export default function WorkspacePage() {
 
   return (
     <div className="flex h-full w-full flex-col bg-surface-1">
-      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line bg-black/10 px-6">
         <span className="shrink-0 text-[13px] font-medium leading-none text-white/80">My workspace</span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+        <div className="relative flex min-w-0 flex-1 items-center justify-end gap-2">
+          <WorkspaceBell />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Find a page"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && hits && hits.length > 0) goHit(hits[0])
+              if (e.key === "Escape") setHits(null)
+            }}
+            placeholder="Search docs & tasks"
             className="hidden w-[160px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none sm:block"
           />
+          {hits !== null && (
+            <div className="absolute right-0 top-full z-30 mt-2 w-[320px] rounded-2xl border border-line bg-[#1e1e1c] p-2 shadow-2xl">
+              {searching ? (
+                <div className="px-3 py-3 text-center text-[12px] text-white/30">Searching…</div>
+              ) : hits.length === 0 ? (
+                <div className="px-3 py-3 text-center text-[12px] text-white/30">No matches for “{q.trim()}”.</div>
+              ) : (
+                hits.map((h, i) => (
+                  <button
+                    key={`${h.kind}:${h.doc_id}:${h.row_id ?? ""}:${i}`}
+                    onClick={() => goHit(h)}
+                    className="w-full rounded-xl px-3 py-2 text-left hover:bg-white/[0.06]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${h.kind === "row" ? "bg-sky-500/15 text-sky-300" : "bg-white/[0.08] text-white/60"}`}>
+                        {h.kind === "row" ? "task" : "page"}
+                      </span>
+                      <span className="truncate text-[12px] font-medium text-white/80">{h.title}</span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-white/35">{h.doc_title}{h.snippet && h.snippet !== h.title ? ` · ${h.snippet}` : ""}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -175,7 +239,7 @@ export default function WorkspacePage() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-[860px] flex-1 overflow-y-auto px-8 py-8">
+      <div className="mx-auto w-full max-w-[860px] flex-1 overflow-y-auto bg-black/10 px-8 py-8">
         <div className="mb-4 flex items-center gap-2">
           <button onClick={() => setShowTrash(false)} className={`rounded-full px-3 py-1.5 text-[12px] ${!showTrash ? "bg-white text-black" : "bg-white/[0.06] text-white/50"}`}>Pages</button>
           <button onClick={() => setShowTrash(true)} className={`rounded-full px-3 py-1.5 text-[12px] ${showTrash ? "bg-white text-black" : "bg-white/[0.06] text-white/50"}`}>Trash {trashDocs.length ? `· ${trashDocs.length}` : ""}</button>

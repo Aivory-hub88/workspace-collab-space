@@ -13,8 +13,8 @@ import WorkspaceHistory from "@/components/workspace/WorkspaceHistory"
 import SharingPanel from "@/components/workspace/SharingPanel"
 import WorkspaceNavigator from "@/components/workspace/WorkspaceNavigator"
 import { clearClientAuthSession, collabAuthHeaders } from "@/lib/collabClient"
-import { parseMarkdown, type ImportedBlock } from "@/lib/markdownImport"
 import { getMarketingUrl } from "@/lib/config"
+import { parseMarkdown, type ImportedBlock } from "@/lib/markdownImport"
 import { useWorkspaceContext } from "@/contexts/WorkspaceContext"
 import { Share2, Star, Trash2, Download, FileDown, Presentation, Upload } from "lucide-react"
 
@@ -57,6 +57,7 @@ export default function WorkspaceDocPage() {
   const [showIconPicker, setShowIconPicker] = useState(false)
   const [aiDocText, setAiDocText] = useState("")
   const [showExport, setShowExport] = useState(false)
+  const [present, setPresent] = useState(false)
   // Markdown import plumbing: the editor registers its importer once live.
   const importFnRef = useRef<((blocks: ImportedBlock[]) => number) | null>(null)
   const importFileRef = useRef<HTMLInputElement | null>(null)
@@ -83,7 +84,6 @@ export default function WorkspaceDocPage() {
       setImportMsg("Could not read that file.")
     }
   }
-  const [present, setPresent] = useState(false)
   const loginUrl = `${getMarketingUrl()}/login`
   const { setActiveWorkspaceId } = useWorkspaceContext()
 
@@ -328,7 +328,7 @@ export default function WorkspaceDocPage() {
 
   return (
     <div className="flex h-full w-full flex-col bg-surface-1">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-line px-6">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-black/10 px-6">
         <div className="flex min-w-0 items-center gap-2">
           <Link href="/workspace" className="shrink-0 text-[13px] text-white/40 hover:text-white/70">
             Workspace
@@ -392,6 +392,28 @@ export default function WorkspaceDocPage() {
           </div>
          </div>
           <div className="flex shrink-0 items-center gap-2">
+
+            {view === "page" && canWrite && (
+              <>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".md,.markdown,text/markdown"
+                  className="hidden"
+                  onChange={(e) => {
+                    void handleImportFile(e.target.files?.[0])
+                    e.target.value = ""
+                  }}
+                />
+                <button
+                  onClick={() => importFileRef.current?.click()}
+                  title="Import Markdown file"
+                  className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] text-white/35 hover:bg-white/[0.06] hover:text-white/80"
+                >
+                  <Upload className="h-3.5 w-3.5" /> Import
+                </button>
+              </>
+            )}
             <div className="relative">
               <button
                 onClick={() => setShowExport((v) => !v)}
@@ -400,27 +422,6 @@ export default function WorkspaceDocPage() {
               >
                 <Download className="h-3.5 w-3.5" /> Export
               </button>
-              {view === "page" && canWrite && (
-                <>
-                  <input
-                    ref={importFileRef}
-                    type="file"
-                    accept=".md,.markdown,text/markdown"
-                    className="hidden"
-                    onChange={(e) => {
-                      void handleImportFile(e.target.files?.[0])
-                      e.target.value = ""
-                    }}
-                  />
-                  <button
-                    onClick={() => importFileRef.current?.click()}
-                    title="Import Markdown file"
-                    className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] text-white/35 hover:bg-white/[0.06] hover:text-white/80"
-                  >
-                    <Upload className="h-3.5 w-3.5" /> Import
-                  </button>
-                </>
-              )}
               {showExport && (
                 <div className="absolute right-0 top-full z-20 mt-2 w-[200px] rounded-2xl border border-line bg-[#1e1e1c] p-2 shadow-2xl">
                   <button
@@ -523,7 +524,7 @@ export default function WorkspaceDocPage() {
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         <WorkspaceNavigator currentId={id} />
-        <div className="min-w-0 flex-1 overflow-y-auto px-8 py-8 lg:px-10 xl:px-12">
+        <div className="min-w-0 flex-1 overflow-y-auto bg-black/10 px-8 py-8 lg:px-10 xl:px-12">
           {view === "page" && (
             <>
               {meta?.cover_url && (
@@ -612,6 +613,7 @@ export default function WorkspaceDocPage() {
               </div>
             </>
           )}
+
           {view === "board" ? (
             isProject ? (
               <ProjectBoard
@@ -639,13 +641,13 @@ export default function WorkspaceDocPage() {
             <WorkspaceDatabase docId={id} readOnly={!canWrite} />
           ) : (
             <>
-                {importMsg && (
-                  <div className="mx-auto mb-4 w-full max-w-[960px] rounded-xl border border-line bg-white/[0.04] px-4 py-2.5 text-[12px] text-white/60">
-                    {importMsg}
-                  </div>
-                )}
-                <WorkspaceEditor docId={id} readOnly={!canWrite} onTextChange={setAiDocText} registerImport={(fn) => { importFnRef.current = fn }} />
-              </>
+              {importMsg && (
+                <div className="mx-auto mb-4 w-full max-w-[960px] rounded-xl border border-line bg-white/[0.04] px-4 py-2.5 text-[12px] text-white/60">
+                  {importMsg}
+                </div>
+              )}
+              <WorkspaceEditor docId={id} readOnly={!canWrite} onTextChange={setAiDocText} registerImport={(fn) => { importFnRef.current = fn }} />
+            </>
           )}
           {view === "page" && (
             <>

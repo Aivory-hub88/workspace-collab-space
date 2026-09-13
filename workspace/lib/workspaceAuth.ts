@@ -1,13 +1,12 @@
 /**
  * Workspace API authZ shared by the /api/workspace routes.
  *
- * Two credential kinds are accepted, mirroring what the collab engine verifies:
+ * Two credential kinds are accepted, mirroring what aivory-collab verifies:
  *   - user: an HS256 JWT (Bearer header or the ws_access_token /
- *     ws_session_token cookies). The same token is forwarded to the collab
- *     engine so
- *     IT enforces per-doc RBAC; this API only gates the endpoint.
+ *     ws_session_token cookies). The same token is forwarded to collab so
+ *     IT enforces per-doc RBAC; the dashboard only gates the endpoint.
  *   - service: `X-Service-Token` equal to COLLAB_SERVICE_TOKEN. Used by
- *     agent-originated, server-side calls (workers → this API). Client
+ *     agent-originated, server-side calls (Cerveau → dashboard). Client
  *     asserted `X-Agent-Type` is NEVER trusted here — collab only honours it
  *     when the request also carries the service token.
  *
@@ -34,7 +33,7 @@ export function workspaceCredential(request: NextRequest): WorkspaceCredential |
   return null
 }
 
-/** Headers to forward to the collab engine so it enforces its own per-doc RBAC. */
+/** Headers to forward to aivory-collab so it enforces its own per-doc RBAC. */
 export function collabAuthHeaders(cred: WorkspaceCredential): Record<string, string> {
   return cred.kind === 'service'
     ? { 'X-Service-Token': cred.token }

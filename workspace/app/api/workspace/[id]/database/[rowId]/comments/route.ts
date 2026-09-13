@@ -11,6 +11,8 @@ import {
   MAX_COMMENT_LEN,
 } from "@/lib/workspaceDb"
 import { recordWorkspaceActivity } from "@/lib/workspaceActivity"
+import { recordCommentMentions } from "@/lib/workspaceMentions"
+import { indexRow, rowText, workspaceOf } from "@/lib/workspaceIndex"
 
 export const runtime = "nodejs"
 
@@ -91,6 +93,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       targetType: "database-row",
       targetId: rowId,
     })
+    await recordCommentMentions({ docId: id, rowId, credential: cred, agentType, source: "comment", text })
+    void indexRow(id, rowId, await workspaceOf(id), rowText(parseDbRow(m))).catch(() => {})
     return NextResponse.json({ id: comment.id, comment }, { status: 201 })
   } catch (e) {
     if (e instanceof WorkspaceDenied) return NextResponse.json({ error: "forbidden" }, { status: e.status })

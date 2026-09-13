@@ -1,11 +1,11 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import * as Y from "yjs"
 import { WebsocketProvider } from "y-websocket"
-import { Table, Kanban, Plus, GripVertical, Calendar, User, Search, ArrowUpNarrowWide, BookmarkPlus, Trash2, Upload, LayoutTemplate } from "lucide-react"
+import { Table, Kanban, Plus, GripVertical, Calendar, User, Search, ArrowUpNarrowWide, BookmarkPlus, Trash2, Upload, LayoutTemplate, Zap } from "lucide-react"
 import { collabAuthHeaders, collabWsParams, collabWsUrl } from "@/lib/collabClient"
-import { readCells, type FieldDef, type CellValue } from "@/lib/workspaceDbModel"
+import { readCells, computeRollups, DUE_FILTERS, matchesDueFilter, parseAutomationRules, type FieldDef, type CellValue, type AutomationRule } from "@/lib/workspaceDbModel"
 
 type RowComment = { id: string; text: string; author: string; at: string }
 type Row = { id: string; title: string; status: string; priority: "Low" | "Med" | "High"; assignee: string; due: string; description: string; comments: RowComment[]; cells: Record<string, CellValue> }
@@ -25,7 +25,7 @@ const AGENT_ASSIGNEES = [
 
 function assigneeLabel(v: string): string {
   const hit = AGENT_ASSIGNEES.find((a) => a.value === v)
-  return hit ? `${hit.label} · agent` : v
+  return hit ? `${hit.label} (agent)` : v
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -72,13 +72,79 @@ function CellEditor({
   value,
   readOnly,
   onChange,
+  relationRows,
+  onEnsureRelationRows,
 }: {
   def: FieldDef
   value: CellValue | undefined
   readOnly: boolean
   onChange: (v: CellValue | undefined) => void
+  relationRows?: Array<{ id: string; title: string; status: string }>
+  onEnsureRelationRows?: () => void
 }) {
   const str = typeof value === "string" ? value : ""
+  if (def.type === "relation") {
+    const linked = Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : []
+    const titleOf = (id: string) => relationRows?.find((r) => r.id === id)?.title || id
+    return (
+      <span className="flex min-w-0 flex-col gap-1" onFocus={onEnsureRelationRows} onClick={onEnsureRelationRows}>
+        {linked.length === 0 ? (
+          <span className="text-[12px] text-white/25">{readOnly ? "—" : "Pick rows…"}</span>
+        ) : (
+          linked.map((id) => (
+            <span key={id} className="group/rel inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-white/70">
+              <span className="min-w-0 flex-1 truncate">{titleOf(id)}</span>
+              {!readOnly && (
+                <button
+                  onClick={() => onChange(linked.filter((x) => x !== id).length ? linked.filter((x) => x !== id) : undefined)}
+                  title="Unlink"
+                  className="shrink-0 rounded text-white/25 opacity-0 hover:text-red-300 group-hover/rel:opacity-100"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))
+        )}
+        {!readOnly && relationRows && relationRows.length > 0 && (
+          <select
+            value=""
+            onChange={(e) => {
+              const id = e.target.value
+              if (id && !linked.includes(id)) onChange([...linked, id].slice(0, 50))
+              e.target.selectedIndex = 0
+            }}
+            className="w-full rounded-full border border-dashed border-white/15 bg-transparent px-2 py-1 text-[11px] text-white/50 outline-none"
+            title={def.targetDocId ? `Link rows from ${def.targetDocId}` : "Link rows"}
+          >
+            <option value="">+ Link…</option>
+            {relationRows
+              .filter((r) => !linked.includes(r.id))
+              .slice(0, 50)
+              .map((r) => (
+                <option key={r.id} value={r.id}>{r.title || "Untitled"}</option>
+              ))}
+          </select>
+        )}
+      </span>
+    )
+  }
+  if (def.type === "rollup") {
+    if (typeof value !== "number") {
+      return <span className="text-[12px] text-white/25">—</span>
+    }
+    if (def.rollupOp === "donePct") {
+      return (
+        <span className="flex min-w-[90px] items-center gap-1.5" title={`${value}% done`}>
+          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.08]">
+            <span className="block h-full rounded-full bg-emerald-400" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+          </span>
+          <span className="text-[11px] font-medium text-white/60">{value}%</span>
+        </span>
+      )
+    }
+    return <span className="text-[13px] font-medium tabular-nums text-white/75">{value}</span>
+  }
   if (def.type === "checkbox") {
     return (
       <input
@@ -330,6 +396,7 @@ type SavedView = {
   q: string
   sortField: string
   sortDir: "asc" | "desc"
+  dueFilter?: string
 }
 
 type DbTemplate = {
@@ -358,6 +425,8 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   const [view, setView] = useState<"table" | "kanban" | "calendar">("table")
   const [statusFilter, setStatusFilter] = useState<string>("All")
   const [priorityFilter, setPriorityFilter] = useState<string>("All")
+  const [dueFilter, setDueFilter] = useState<string>("All")
+  const [hideEmpty, setHideEmpty] = useState(false)
   const [q, setQ] = useState("")
   const [sortField, setSortField] = useState<string>("title")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
@@ -377,6 +446,9 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   // Board grouping: status (default kanban) | assignee (workload) | priority.
   // Session-only; saved views keep controlling filters/sort.
   const [groupBy, setGroupBy] = useState<"status" | "assignee" | "priority">("status")
+  // Table assignee cell is display-first ("Geno (agent)"); click to edit.
+  const [editingAssigneeId, setEditingAssigneeId] = useState<string | null>(null)
+  const [assigneeDraft, setAssigneeDraft] = useState("")
   // Swimlanes (status board only): second dimension splitting columns into lanes.
   const [laneBy, setLaneBy] = useState<"none" | "assignee" | "priority">("none")
   const [quickLane, setQuickLane] = useState<string | null>(null)
@@ -390,7 +462,6 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     const t = setTimeout(() => setNotice(null), 5000)
     return () => clearTimeout(t)
   }, [notice])
-  const selectedRow = selectedId ? rows.find((r) => r.id === selectedId) ?? null : null
   const readOnlyRef = useRef(readOnly)
   useEffect(() => {
     readOnlyRef.current = readOnly
@@ -404,6 +475,67 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   const [newFieldName, setNewFieldName] = useState("")
   const [newFieldType, setNewFieldType] = useState<FieldDef["type"]>("text")
   const [newFieldOptions, setNewFieldOptions] = useState("")
+  const [newFieldTarget, setNewFieldTarget] = useState("")
+  const [newFieldRelation, setNewFieldRelation] = useState("")
+  const [newFieldOp, setNewFieldOp] = useState<"count" | "donePct" | "sum">("count")
+  const [newFieldNumber, setNewFieldNumber] = useState("")
+  // Automations (Fase 4e): status-entry rules in pg props.dbAutomations.
+  const [automations, setAutomations] = useState<AutomationRule[]>([])
+  const [showAutomations, setShowAutomations] = useState(false)
+  const [newRuleName, setNewRuleName] = useState("")
+  const [newRuleWhen, setNewRuleWhen] = useState("Done")
+  const [newRuleAssignee, setNewRuleAssignee] = useState("")
+  const [newRuleComment, setNewRuleComment] = useState("")
+  const [newRuleMoveTo, setNewRuleMoveTo] = useState("")
+  // Target-doc rows for relation pickers (cached per doc; read-gated server-side).
+  const [targetRows, setTargetRows] = useState<Record<string, Row[]>>({})
+  const targetLoading = useRef<Set<string>>(new Set())
+
+  const ensureTargetRows = (targetDocId: string | undefined) => {
+    if (!targetDocId || targetRows[targetDocId] || targetLoading.current.has(targetDocId)) return
+    targetLoading.current.add(targetDocId)
+    fetch(`/api/workspace/${targetDocId}/database`, { headers: collabAuthHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (Array.isArray(j?.rows)) setTargetRows((prev) => ({ ...prev, [targetDocId]: j.rows as Row[] }))
+      })
+      .catch(() => {})
+      .finally(() => {
+        targetLoading.current.delete(targetDocId)
+      })
+  }
+
+  // Preload relation targets when fields (or doc) change so pickers show titles.
+  useEffect(() => {
+    for (const f of fields) {
+      if (f.type === "relation" && f.targetDocId) ensureTargetRows(f.targetDocId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId, fields])
+
+  // Display rows: stored rows + locally computed rollups (same pure function
+  // the server uses, over readable target caches). Ids stable, writes still
+  // go through updateRow on stored state.
+  const displayRows: Row[] = useMemo(() => {
+    if (fields.every((f) => f.type !== "rollup")) return rows
+    const computed = computeRollups(rows, fields, (id) => targetRows[id] ?? null)
+    if (Object.keys(computed).length === 0) return rows
+    // Nulls (unreadable links) are omitted — the cell renders as empty.
+    return rows.map((r) => {
+      const c = computed[r.id]
+      if (!c) return r
+      const cells: Row["cells"] = { ...r.cells }
+      for (const [k, v] of Object.entries(c)) {
+        if (v === null) delete cells[k]
+        else cells[k] = v
+      }
+      return { ...r, cells }
+    })
+  }, [rows, fields, targetRows])
+
+  // Drawer row resolves against display rows (local rollups included); all
+  // edits address stored state by stable id via updateRow/updateCell.
+  const selectedRow = selectedId ? displayRows.find((r) => r.id === selectedId) ?? null : null
   useEffect(() => {
     let alive = true
     fetch(`/api/workspace/${docId}/meta`, { headers: collabAuthHeaders() })
@@ -447,6 +579,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             .slice(0, 20)
           setFields(cleanedFields)
         }
+        setAutomations(parseAutomationRules(props?.dbAutomations))
         setViewsLoaded(true)
       })
       .catch(() => { if (alive) setViewsLoaded(true) })
@@ -464,6 +597,42 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     } catch {}
   }
 
+  const persistAutomations = async (next: AutomationRule[]) => {
+    setAutomations(next)
+    try {
+      await fetch(`/api/workspace/${docId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...collabAuthHeaders() },
+        body: JSON.stringify({ props: { dbAutomations: next } }),
+      })
+    } catch {}
+  }
+
+  const addAutomation = () => {
+    if (readOnlyRef.current || automations.length >= 20) return
+    const name = newRuleName.trim().slice(0, 40)
+    if (!name || !["Todo", "Doing", "Done"].includes(newRuleWhen)) return
+    const rule: AutomationRule = { id: `auto-${uid()}`, name, whenStatus: newRuleWhen }
+    const assignee = newRuleAssignee.trim().slice(0, 100)
+    if (assignee) rule.setAssignee = assignee
+    const comment = newRuleComment.trim().slice(0, 500)
+    if (comment) rule.addComment = comment
+    if (newRuleMoveTo && ["Todo", "Doing", "Done"].includes(newRuleMoveTo) && newRuleMoveTo !== newRuleWhen) {
+      rule.moveTo = newRuleMoveTo
+    }
+    if (rule.setAssignee === undefined && rule.addComment === undefined && rule.moveTo === undefined) return
+    void persistAutomations([...automations, rule])
+    setNewRuleName("")
+    setNewRuleAssignee("")
+    setNewRuleComment("")
+    setNewRuleMoveTo("")
+  }
+
+  const removeAutomation = (ruleId: string) => {
+    if (readOnlyRef.current) return
+    void persistAutomations(automations.filter((r) => r.id !== ruleId))
+  }
+
   const addField = () => {
     if (readOnlyRef.current || fields.length >= 20) return
     const name = newFieldName.trim().slice(0, 24)
@@ -473,9 +642,28 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
         ? newFieldOptions.split(",").map((o) => o.trim().slice(0, 24)).filter(Boolean).filter((o, i, a) => a.indexOf(o) === i).slice(0, 20)
         : []
     const def: FieldDef = { id: `f-${uid()}`, name, type: newFieldType, options }
+    if (newFieldType === "relation") {
+      const target = newFieldTarget.trim().replace(/^workspace:(room:|db:)?/, "").slice(0, 64)
+      if (!target) return
+      def.targetDocId = target
+    }
+    if (newFieldType === "rollup") {
+      const rel = fields.find((f) => f.id === newFieldRelation && f.type === "relation")
+      if (!rel || (newFieldOp !== "count" && newFieldOp !== "donePct" && newFieldOp !== "sum")) return
+      def.relationFieldId = rel.id
+      def.rollupOp = newFieldOp
+      if (newFieldOp === "sum") {
+        const numField = newFieldNumber.trim().slice(0, 16)
+        if (!numField) return
+        def.rollupFieldId = numField
+      }
+    }
     void persistFields([...fields, def])
     setNewFieldName("")
     setNewFieldOptions("")
+    setNewFieldTarget("")
+    setNewFieldRelation("")
+    setNewFieldNumber("")
   }
 
   const removeField = (fieldId: string) => {
@@ -559,6 +747,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     setQ(v.q)
     setSortField(v.sortField)
     setSortDir(v.sortDir)
+    setDueFilter(typeof v.dueFilter === "string" && (DUE_FILTERS as string[]).includes(v.dueFilter) ? v.dueFilter : "All")
   }
 
   const saveCurrentAsView = async () => {
@@ -575,6 +764,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
       q: q.slice(0, 64),
       sortField,
       sortDir,
+      dueFilter,
     }
     await persistViews([...savedViews, next])
     setActiveViewId(next.id)
@@ -765,7 +955,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
   const boardColumns = (): Array<{ key: string; label: string }> => {
     if (groupBy === "assignee") {
       const names = Array.from(new Set(rows.map((r) => r.assignee.trim()).filter(Boolean))).sort().slice(0, 8)
-      return [...names.map((n) => ({ key: n, label: n })), { key: "", label: "Unassigned" }]
+      return [...names.map((n) => ({ key: n, label: assigneeLabel(n) })), { key: "", label: "Unassigned" }]
     }
     if (groupBy === "priority") return [...PRIORITIES].reverse().map((p) => ({ key: p, label: `${p} priority` }))
     return STATUSES.map((s) => ({ key: s, label: s }))
@@ -945,12 +1135,13 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
     setImporting(false)
   }
 
-  const baseFiltered = rows.filter((r) => {
+  const baseFiltered = displayRows.filter((r) => {
     const statusOk = statusFilter === "All" || r.status === statusFilter
     const prioOk = priorityFilter === "All" || r.priority === priorityFilter
     const needle = q.trim().toLowerCase()
     const searchOk = !needle || r.title.toLowerCase().includes(needle) || r.assignee.toLowerCase().includes(needle) || r.id.toLowerCase().includes(needle)
-    return statusOk && prioOk && searchOk
+    const dueOk = dueFilter === "All" || matchesDueFilter(r.due, r.status, dueFilter, new Date().toISOString().slice(0, 10))
+    return statusOk && prioOk && searchOk && dueOk
   })
 
   const priorityRank: Record<string, number> = { High: 3, Med: 2, Low: 1 }
@@ -986,7 +1177,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
       {viewsLoaded && (
         <div className="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1">
           <button
-            onClick={() => { setActiveViewId(null); setView("table"); setStatusFilter("All"); setPriorityFilter("All"); setQ(""); setSortField("title"); setSortDir("asc") }}
+            onClick={() => { setActiveViewId(null); setView("table"); setStatusFilter("All"); setPriorityFilter("All"); setDueFilter("All"); setQ(""); setSortField("title"); setSortDir("asc") }}
             className={`shrink-0 rounded-full border px-3 py-1 text-[12px] ${activeViewId === null ? "border-white bg-white text-black" : "border-line bg-white/[0.04] text-white/50 hover:text-white/80"}`}
           >
             All
@@ -1098,6 +1289,17 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                 ))}
               </select>
               <span className="text-white/10">|</span>
+              <select
+                value={dueFilter}
+                onChange={(e) => setDueFilter(e.target.value)}
+                title="Filter by due date"
+                className="bg-transparent px-2 py-1 text-[12px] text-white/60 outline-none"
+              >
+                {DUE_FILTERS.map((d) => (
+                  <option key={d} value={d}>{d === "All" ? "All dates" : d}</option>
+                ))}
+              </select>
+              <span className="text-white/10">|</span>
               <select value={sortField} onChange={(e) => setSortField(e.target.value)} className="bg-transparent px-2 py-1 text-[12px] text-white/60 outline-none">
                 <option value="title">Title</option>
                 <option value="status">Status</option>
@@ -1145,6 +1347,14 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                 >
                   Fields{fields.length ? ` · ${fields.length}` : ""}
                 </button>
+                <button
+                  onClick={() => setShowAutomations((v) => !v)}
+                  title="Automate: when a card enters a status, assign, comment, or move it"
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-[12.5px] font-medium ${showAutomations ? "border-white bg-white text-black" : "border-line bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white"}`}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  Automate{automations.length ? ` · ${automations.length}` : ""}
+                </button>
                 <input
                   ref={importRef}
                   type="file"
@@ -1188,7 +1398,13 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
               {fields.map((f) => (
                 <div key={f.id} className="group flex items-center justify-between gap-2 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
                   <span className="min-w-0 truncate text-[12px] text-white/70">
-                    {f.name} <span className="text-white/25">· {f.type}{f.options.length ? ` · ${f.options.join(", ")}` : ""}</span>
+                    {f.name}{" "}
+                    <span className="text-white/25">
+                      · {f.type}
+                      {f.type === "relation" && f.targetDocId ? ` → ${f.targetDocId}` : ""}
+                      {f.type === "rollup" && f.relationFieldId ? ` · ${f.rollupOp}` : ""}
+                      {f.options.length ? ` · ${f.options.join(", ")}` : ""}
+                    </span>
                   </span>
                   <button onClick={() => removeField(f.id)} title="Delete field (values stay on rows but hide)" className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-white/20 opacity-0 hover:text-red-300 group-hover:opacity-100">
                     ✕
@@ -1213,6 +1429,8 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
               <option value="checkbox">Checkbox</option>
               <option value="date">Date</option>
               <option value="url">URL</option>
+              <option value="relation">Relation</option>
+              <option value="rollup">Rollup</option>
             </select>
             {(newFieldType === "select" || newFieldType === "multi") && (
               <input
@@ -1223,8 +1441,128 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                 className="w-[220px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
               />
             )}
+            {newFieldType === "relation" && (
+              <input
+                value={newFieldTarget}
+                onChange={(e) => setNewFieldTarget(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addField() }}
+                placeholder="Target doc id"
+                className="w-[180px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
+              />
+            )}
+            {newFieldType === "rollup" && (
+              <>
+                <select
+                  value={newFieldRelation}
+                  onChange={(e) => setNewFieldRelation(e.target.value)}
+                  className="rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 outline-none"
+                  title="Relation to aggregate"
+                >
+                  <option value="">Relation…</option>
+                  {fields
+                    .filter((f) => f.type === "relation")
+                    .map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                </select>
+                <select
+                  value={newFieldOp}
+                  onChange={(e) => setNewFieldOp(e.target.value as "count" | "donePct" | "sum")}
+                  className="rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 outline-none"
+                  title="Aggregation"
+                >
+                  <option value="count">Count</option>
+                  <option value="donePct">% Done</option>
+                  <option value="sum">Sum</option>
+                </select>
+                {newFieldOp === "sum" && (
+                  <input
+                    value={newFieldNumber}
+                    onChange={(e) => setNewFieldNumber(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") addField() }}
+                    placeholder="Number field id in target"
+                    className="w-[180px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
+                  />
+                )}
+              </>
+            )}
             <button onClick={addField} disabled={!newFieldName.trim() || fields.length >= 20} className="rounded-full bg-white px-4 py-1.5 text-[12px] font-medium text-black hover:bg-white/90 disabled:opacity-40">
               Add field
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showAutomations && !readOnly && (
+        <div className="mb-4 rounded-2xl border border-line bg-white/[0.025] p-4">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-white/30">
+            Automations · {automations.length}/20
+          </div>
+          <div className="mb-3 text-[12px] leading-relaxed text-white/35">
+            When a card enters a status, assign it, comment, or move it on. Chained moves never re-trigger.
+          </div>
+          {automations.length > 0 && (
+            <div className="mb-3 flex flex-col gap-1.5">
+              {automations.map((r) => (
+                <div key={r.id} className="group flex items-center justify-between gap-2 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
+                  <span className="min-w-0 truncate text-[12px] text-white/70">
+                    {r.name}{" "}
+                    <span className="text-white/25">
+                      · on {r.whenStatus}
+                      {r.setAssignee ? ` → ${r.setAssignee}` : ""}
+                      {r.addComment ? " + comment" : ""}
+                      {r.moveTo ? ` → ${r.moveTo}` : ""}
+                    </span>
+                  </span>
+                  <button onClick={() => removeAutomation(r.id)} title="Delete automation" className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-white/20 opacity-0 hover:text-red-300 group-hover:opacity-100">
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={newRuleName}
+              onChange={(e) => setNewRuleName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addAutomation() }}
+              placeholder="Rule name"
+              className="w-[160px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
+            />
+            <span className="text-[12px] text-white/30">when entering</span>
+            <select value={newRuleWhen} onChange={(e) => setNewRuleWhen(e.target.value)} className="rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 outline-none">
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <input
+              value={newRuleAssignee}
+              onChange={(e) => setNewRuleAssignee(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addAutomation() }}
+              placeholder="Assign to (optional)"
+              list={`workspace-assignees-${docId}`}
+              className="w-[160px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
+            />
+            <input
+              value={newRuleComment}
+              onChange={(e) => setNewRuleComment(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addAutomation() }}
+              placeholder="Comment (optional)"
+              className="w-[200px] rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/80 placeholder:text-white/30 outline-none"
+            />
+            <select
+              value={newRuleMoveTo}
+              onChange={(e) => setNewRuleMoveTo(e.target.value)}
+              title="Move to (optional)"
+              className="rounded-full border border-line bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 outline-none"
+            >
+              <option value="">No move</option>
+              {STATUSES.filter((s) => s !== newRuleWhen).map((s) => (
+                <option key={s} value={s}>Move to {s}</option>
+              ))}
+            </select>
+            <button onClick={addAutomation} disabled={!newRuleName.trim() || automations.length >= 20} className="rounded-full bg-white px-4 py-1.5 text-[12px] font-medium text-black hover:bg-white/90 disabled:opacity-40">
+              Add rule
             </button>
           </div>
         </div>
@@ -1303,15 +1641,42 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1.5">
-                        <User className="h-3 w-3 text-white/25" />
-                        <input
-                          value={r.assignee}
-                          disabled={readOnly}
-                          list={`workspace-assignees-${docId}`}
-                          onChange={(e) => updateRow(r.id, { assignee: e.target.value })}
-                          placeholder="—"
-                          className="w-full bg-transparent text-[13px] text-white/60 placeholder:text-white/25 outline-none disabled:opacity-80"
-                        />
+                        <User className="h-3 w-3 shrink-0 text-white/25" />
+                        {editingAssigneeId === r.id ? (
+                          <input
+                            autoFocus
+                            value={assigneeDraft}
+                            list={`workspace-assignees-${docId}`}
+                            disabled={readOnly}
+                            onChange={(e) => setAssigneeDraft(e.target.value)}
+                            onBlur={() => {
+                              updateRow(r.id, { assignee: assigneeDraft.trim().slice(0, 100) })
+                              setEditingAssigneeId(null)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                updateRow(r.id, { assignee: assigneeDraft.trim().slice(0, 100) })
+                                setEditingAssigneeId(null)
+                              }
+                              if (e.key === "Escape") setEditingAssigneeId(null)
+                            }}
+                            placeholder="—"
+                            className="w-full bg-transparent text-[13px] text-white/80 placeholder:text-white/25 outline-none disabled:opacity-80"
+                          />
+                        ) : (
+                          <button
+                            disabled={readOnly}
+                            onClick={() => {
+                              if (readOnly) return
+                              setAssigneeDraft(r.assignee)
+                              setEditingAssigneeId(r.id)
+                            }}
+                            title={readOnly ? undefined : "Click to change assignee"}
+                            className={`min-w-0 flex-1 truncate text-left text-[13px] ${r.assignee ? "text-white/60" : "text-white/25"} ${readOnly ? "" : "hover:text-white/85"}`}
+                          >
+                            {r.assignee ? assigneeLabel(r.assignee) : "—"}
+                          </button>
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-3">
@@ -1328,7 +1693,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                     </td>
                     {fields.map((f) => (
                       <td key={f.id} className="max-w-[180px] px-3 py-3">
-                        <CellEditor def={f} value={r.cells[f.id]} readOnly={readOnly} onChange={(v) => updateCell(r.id, f.id, v)} />
+                        <CellEditor def={f} value={r.cells[f.id]} readOnly={readOnly} onChange={(v) => updateCell(r.id, f.id, v)} relationRows={f.targetDocId ? targetRows[f.targetDocId] : undefined} onEnsureRelationRows={() => ensureTargetRows(f.targetDocId)} />
                       </td>
                     ))}
                     <td className="px-2 py-3 text-right">
@@ -1379,6 +1744,15 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             ))}
           </div>
           )}
+          <div className="mb-3 flex items-center gap-2 self-start">
+            <button
+              onClick={() => setHideEmpty((v) => !v)}
+              title="Hide empty columns (slim drop zones remain)"
+              className={`rounded-full border px-3 py-1 text-[12px] transition ${hideEmpty ? "border-white bg-white font-medium text-black" : "border-line bg-white/[0.04] text-white/40 hover:text-white/70"}`}
+            >
+              Hide empty
+            </button>
+          </div>
           {swimlanes().map((lane) => {
             const laneRows = laneBy === "none" || groupBy !== "status" ? filtered : filtered.filter((r) => laneOf(r) === lane.key)
             return (
@@ -1395,6 +1769,49 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
             const inCol = laneRows.filter((r) => groupKeyOf(r) === s)
             const limit = groupBy === "status" ? wip[s] : undefined
             const over = limit !== undefined && inCol.length > limit
+            // Hide-empty: collapse zero-card columns to a slim drop zone so
+            // cards can still be dragged in and WIP state stays visible.
+            if (hideEmpty && inCol.length === 0) {
+              return (
+                <div
+                  key={s || "__unassigned__"}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => onDropKanban(e, s)}
+                  title={`Drop here for ${label}`}
+                  className="flex min-w-[64px] flex-col items-center gap-2 rounded-[14px] border border-dashed border-white/10 bg-transparent p-2"
+                >
+                  <span className="truncate text-[10px] font-medium uppercase tracking-wider text-white/25" style={{ writingMode: "vertical-rl" }}>{label}</span>
+                  {!readOnly && (
+                    quickStatus === s && (laneBy === "none" || groupBy !== "status" || quickLane === lane.key) ? (
+                      <div className="flex w-full flex-col gap-1.5 rounded-[12px] border border-white/15 bg-white/[0.03] p-2">
+                        <input
+                          autoFocus
+                          value={quickTitle}
+                          onChange={(e) => setQuickTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") quickAddRow()
+                            if (e.key === "Escape") { setQuickStatus(null); setQuickTitle(""); setQuickLane(null) }
+                          }}
+                          placeholder={`New…`}
+                          className="w-full bg-transparent px-1 py-1 text-[12px] text-white/80 placeholder:text-white/25 outline-none"
+                        />
+                        <button onClick={quickAddRow} disabled={!quickTitle.trim()} className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-black hover:bg-white/90 disabled:opacity-40">
+                          Add
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setQuickStatus(s); setQuickTitle(""); setQuickLane(lane.key) }}
+                        title={`Add in ${label}`}
+                        className="rounded-full bg-white/[0.06] p-1 text-white/40 hover:text-white/70"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    )
+                  )}
+                </div>
+              )
+            }
             return (
             <div
               key={s || "__unassigned__"}
@@ -1628,7 +2045,7 @@ export default function WorkspaceDatabase({ docId, readOnly = false }: { docId: 
                     {fields.map((f) => (
                       <label key={f.id} className="block rounded-xl border border-line bg-white/[0.02] px-3 py-2">
                         <span className="mb-1 block text-[11px] text-white/40">{f.name} <span className="text-white/20">· {f.type}</span></span>
-                        <CellEditor def={f} value={selectedRow.cells[f.id]} readOnly={readOnly} onChange={(v) => updateCell(selectedRow.id, f.id, v)} />
+                        <CellEditor def={f} value={selectedRow.cells[f.id]} readOnly={readOnly} onChange={(v) => updateCell(selectedRow.id, f.id, v)} relationRows={f.targetDocId ? targetRows[f.targetDocId] : undefined} onEnsureRelationRows={() => ensureTargetRows(f.targetDocId)} />
                       </label>
                     ))}
                   </div>

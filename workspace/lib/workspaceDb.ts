@@ -2,7 +2,8 @@ import * as Y from "yjs"
 import { query } from "@/lib/db"
 import { canonicalRoomId, legacyDocId, mergeYjsUpdates } from "@/lib/workspaceDoc"
 import { collabAuthHeaders, type WorkspaceCredential } from "@/lib/workspaceAuth"
-import { parseFieldDefs, type FieldDef, type CellValue } from "@/lib/workspaceDbModel"
+import { canReadDocId } from "@/lib/workspaceAccess"
+import { computeRollups, parseFieldDefs, type FieldDef, type CellValue } from "@/lib/workspaceDbModel"
 
 // Re-exported so existing importers keep working; the pure model lives in
 // workspaceDbModel.ts (client-safe: no pg/node imports, see its header).
@@ -221,4 +222,52 @@ export function wipExceeded(rows: DbRow[], status: string, limits: Record<string
   if (limit === undefined) return null
   const count = rows.filter((r) => r.status === status && r.id !== excludeId).length
   return count + 1 > limit ? limit : null
+}
+
+/**
+ * Resolve rollup cells for rows (Fase 4a): loads each distinct target doc
+ * once (gated per doc — unreadable targets resolve to null, never leak),
+ * computes via the pure computeRollups, and injects values into the rows'
+ * cells for the response. Never persisted here; storage stays raw links.
+ */
+export async function withResolvedRollups(
+  rows: DbRow[],
+  defs: FieldDef[],
+  cred: WorkspaceCredential,
+  agentType?: string,
+  allowPgFallback = false,
+): Promise<DbRow[]> {
+  const needTargets = new Set<string>()
+  for (const d of defs) {
+    if (d.type !== "rollup" || !d.relationFieldId) continue
+    const rel = defs.find((x) => x.id === d.relationFieldId && x.type === "relation")
+    if (rel?.targetDocId) needTargets.add(rel.targetDocId)
+  }
+  if (needTargets.size === 0 || rows.length === 0) return rows
+  const cache = new Map<string, DbRow[] | null>()
+  for (const t of needTargets) {
+    if (!(await canReadDocId(cred, t, agentType))) {
+      cache.set(t, null)
+      continue
+    }
+    try {
+      const doc = await loadDbDoc(t, cred, agentType, allowPgFallback)
+      cache.set(t, rowsFromDbDoc(doc))
+    } catch {
+      cache.set(t, null)
+    }
+  }
+  const computed = computeRollups(rows, defs, (docId) => cache.get(docId) ?? null)
+  if (Object.keys(computed).length === 0) return rows
+  // Nulls (unreadable links) are omitted from cells — renderers show empty.
+  return rows.map((r) => {
+    const c = computed[r.id]
+    if (!c) return r
+    const cells: DbRow["cells"] = { ...r.cells }
+    for (const [k, v] of Object.entries(c)) {
+      if (v === null) delete cells[k]
+      else cells[k] = v
+    }
+    return { ...r, cells }
+  })
 }

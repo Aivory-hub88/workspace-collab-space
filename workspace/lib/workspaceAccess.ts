@@ -107,6 +107,24 @@ export function canWrite(role: DocRole): boolean {
 }
 
 /**
+ * Read gate for an arbitrary doc (used by rollups + board aggregates that
+ * fan out beyond the request's own doc). Service callers without an asserted
+ * agent keep legacy full access; asserted known agents are scoped to their
+ * grant on THAT doc; users go through the normal role resolution.
+ */
+export async function canReadDocId(
+  cred: WorkspaceCredential,
+  docId: string,
+  agentType?: string | null,
+): Promise<boolean> {
+  if (cred.kind === 'service') {
+    if (!isKnownAgentType(agentType)) return true
+    return canRead(await getAgentDocRole(docId, agentType))
+  }
+  return canRead(await getDocRole(cred, docId))
+}
+
+/**
  * Agent gate for service-credential calls (Cerveau → dashboard → collab).
  * Client-asserted agent types are only meaningful with a service credential;
  * user credentials and unasserted service calls keep legacy behavior (null =
